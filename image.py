@@ -242,55 +242,57 @@ class ChartBatchProcessor:
             self.generator.config.intervals))
         os.makedirs(save_dir, exist_ok=True)
         images_filename = os.path.join(
-            save_dir, f'charts_{self.generator.config.intervals}d_images.dat')
+            save_dir, f'images_{self.generator.config.intervals}d.npy')
 
-        with open(images_filename, 'wb') as f_images:
-            pbar = tqdm(total=total_combinations, desc="Generating charts")
+        images_list = []
+        pbar = tqdm(total=total_combinations, desc="Generating charts")
 
-            for ticker in selected_tickers:
-                ticker_dates = self.generator.ma_data[ticker].dropna().index
+        for ticker in selected_tickers:
+            ticker_dates = self.generator.ma_data[ticker].dropna().index
 
-                for i, start_date in enumerate(ticker_dates):
-                    max_idx = len(ticker_dates) - \
-                        (2 * self.generator.config.intervals) - 1
+            for i, start_date in enumerate(ticker_dates):
+                max_idx = len(ticker_dates) - \
+                    (2 * self.generator.config.intervals) - 1
 
-                    if i < max_idx:
-                        end_date = ticker_dates[i +
-                                                self.generator.config.intervals - 1]
-                        estimation_start = ticker_dates[i +
-                                                        self.generator.config.intervals]
-                        estimation_end = ticker_dates[i +
-                                                      self.generator.config.intervals + self.generator.config.intervals]
+                if i < max_idx:
+                    end_date = ticker_dates[i +
+                                            self.generator.config.intervals - 1]
+                    estimation_start = ticker_dates[i +
+                                                    self.generator.config.intervals]
+                    estimation_end = ticker_dates[i +
+                                                  self.generator.config.intervals + self.generator.config.intervals]
 
-                        try:
-                            image, label = self.generator.generate_chart_image(
-                                ticker, start_date, end_date, estimation_start, estimation_end)
+                    try:
+                        image, label = self.generator.generate_chart_image(
+                            ticker, start_date, end_date, estimation_start, estimation_end)
 
-                            f_images.write(image.tobytes())
+                        images_list.append(np.array(image))
 
-                            metadata_list.append({
-                                'ticker': ticker,
-                                'start_date': start_date.strftime('%Y%m%d'),
-                                'end_date': end_date.strftime('%Y%m%d'),
-                                'estimation_start': estimation_start.strftime('%Y%m%d'),
-                                'estimation_end': estimation_end.strftime('%Y%m%d'),
-                                'label': label,
-                                'image_idx': image_counter
-                            })
-                            image_counter += 1
+                        metadata_list.append({
+                            'ticker': ticker,
+                            'start_date': start_date.strftime('%Y%m%d'),
+                            'end_date': end_date.strftime('%Y%m%d'),
+                            'estimation_start': estimation_start.strftime('%Y%m%d'),
+                            'estimation_end': estimation_end.strftime('%Y%m%d'),
+                            'label': label,
+                            'image_idx': image_counter
+                        })
+                        image_counter += 1
 
-                        except Exception:
-                            pass
-                        finally:
-                            pbar.update(1)
+                    except Exception as e:
+                        print(
+                            f"SKIP: {ticker} {start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')} | {str(e)}")
+                    finally:
+                        pbar.update(1)
 
-            pbar.close()
+        pbar.close()
 
         if image_counter == 0:
             print("No charts were successfully generated.")
-            if os.path.exists(images_filename):
-                os.remove(images_filename)
             return
+
+        images_array = np.array(images_list)
+        np.save(images_filename, images_array)
 
         metadata_df = pd.DataFrame(metadata_list)
         metadata_filename = os.path.join(
@@ -307,8 +309,7 @@ class ChartBatchProcessor:
         save_dir = os.path.join(
             self.generator.config.img_save_dir, str(intervals))
 
-        images_filename = os.path.join(
-            save_dir, f'charts_{intervals}d_images.dat')
+        images_filename = os.path.join(save_dir, f'images_{intervals}d.npy')
         metadata_filename = os.path.join(
             save_dir, f'charts_{intervals}d_metadata.feather')
 
@@ -520,5 +521,5 @@ def run_single(ticker: str, intervals: int = 20):
 
 
 if __name__ == "__main__":
-    run_batch(frequencies=[5, 20, 60])
-    # run_batch(frequencies=[5])
+    # run_batch(frequencies=[5, 20, 60])
+    run_batch(frequencies=[5])
