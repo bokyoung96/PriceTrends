@@ -33,11 +33,23 @@ class KoreanEquityDataset(Dataset):
             years)].reset_index()
 
         print("Loading image data via memory-mapping...")
-        self.images = np.load(images_path, mmap_mode='r')
-        print("Image data memory-mapped successfully.")
+        num_images = len(all_metadata)
 
-        self.image_height = self.images.shape[1]
-        self.image_width = self.images.shape[2]
+        if self.intervals == 5:
+            self.image_height = 32
+        elif self.intervals == 20:
+            self.image_height = 64
+        elif self.intervals == 60:
+            self.image_height = 96
+        else:
+            raise ValueError(f"Unsupported interval: {self.intervals}")
+        self.image_width = self.intervals * 3
+        image_size = self.image_height * self.image_width
+
+        self.images = np.memmap(
+            images_path, dtype=np.uint8, mode='r', shape=(num_images, image_size))
+
+        print("Image data memory-mapped successfully.")
 
     def __len__(self) -> int:
         return len(self.metadata)
@@ -46,7 +58,9 @@ class KoreanEquityDataset(Dataset):
         row = self.metadata.iloc[idx]
 
         original_image_idx = row.image_idx
-        img_array = self.images[original_image_idx]
+        img_array_flat = self.images[original_image_idx]
+
+        img_array = img_array_flat.reshape(self.image_height, self.image_width)
 
         img_tensor = torch.from_numpy(
             img_array.astype(np.float32)).unsqueeze(0)
@@ -221,14 +235,26 @@ class Trainer:
         self.pw = pw
         self.config = config
 
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu")
+        self.device = self._get_optimal_device()
         print(f"Using device: {self.device}")
+
+        if self.device.type == 'mps':
+            print("M1 GPU acceleration enabled via Metal Performance Shaders")
+            torch.backends.mps.enabled = True
 
         self.exp_name = f"korea_cnn_{ws}d{pw}p_{config['mode']}"
         self.model_dir = os.path.join(
             os.path.dirname(__file__), 'models', self.exp_name)
         os.makedirs(self.model_dir, exist_ok=True)
+
+    def _get_optimal_device(self) -> torch.device:
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            return torch.device("mps")
+        elif torch.cuda.is_available():
+            return torch.device("cuda")
+        else:
+            print("Warning: No GPU acceleration available, falling back to CPU")
+            return torch.device("cpu")
 
     def get_dataloaders(self, train_years: List[int], train_ratio: float = 0.7) -> Dict[str, DataLoader]:
         full_dataset = KoreanEquityDataset(self.ws, train_years)
@@ -246,10 +272,28 @@ class Trainer:
         print(
             f"Train size: {len(train_dataset)} ({train_ratio*100:.0f}%), Validation size: {len(val_dataset)} ({(1-train_ratio)*100:.0f}%)")
 
+        # num_workers = min(8, os.cpu_count() or 1)
+        # On macOS, num_workers > 0 can cause deadlocks. Setting to 0 is a common workaround.
+        num_workers = 0
+        print(
+            f"Using {num_workers} workers for data loading (Set to 0)")
+
         train_loader = DataLoader(
-            train_dataset, batch_size=self.config['batch_size'], shuffle=True, num_workers=0)
+            train_dataset,
+            batch_size=self.config['batch_size'],
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=self.device.type == 'cuda',
+            persistent_workers=True if num_workers > 0 else False
+        )
         val_loader = DataLoader(
-            val_dataset, batch_size=self.config['batch_size'], shuffle=False, num_workers=0)
+            val_dataset,
+            batch_size=self.config['batch_size'],
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=self.device.type == 'cuda',
+            persistent_workers=True if num_workers > 0 else False
+        )
 
         return {"train": train_loader, "validate": val_loader}
 
@@ -282,7 +326,8 @@ class Trainer:
             max_pooling_list=[(2, 1)] * len(self.config['conv_channels']),
         ).to(self.device)
 
-        optimizer = optim.Adam(model.parameters(), lr=self.config['lr'])
+        optimizer = optim.AdamW(
+            model.parameters(), lr=self.config['lr'], weight_decay=1e-4)
         criterion = nn.CrossEntropyLoss()
 
         best_val_loss = float('inf')
@@ -301,24 +346,25 @@ class Trainer:
 
                 loader = dataloaders_dict[phase]
                 for batch in tqdm(loader, desc=f"Epoch {epoch+1}/{self.config['max_epoch']} - {phase}"):
-                    inputs = batch['image'].to(self.device)
-                    labels = batch['label'].to(self.device)
+                    inputs = batch['image'].to(self.device, non_blocking=True)
+                    labels = batch['label'].to(self.device, non_blocking=True)
 
                     optimizer.zero_grad()
+
                     with torch.set_grad_enabled(phase == 'train'):
                         outputs = model(inputs)
                         loss = criterion(outputs, labels)
-                        _, preds = torch.max(outputs, 1)
 
                         if phase == 'train':
                             loss.backward()
                             optimizer.step()
 
+                    _, preds = torch.max(outputs, 1)
                     running_loss += loss.item() * inputs.size(0)
                     running_corrects += torch.sum(preds == labels.data)
 
                 epoch_loss = running_loss / len(loader.dataset)
-                epoch_acc = running_corrects.double() / len(loader.dataset)
+                epoch_acc = running_corrects.float() / len(loader.dataset)
                 print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
 
                 if phase == 'validate':
@@ -336,6 +382,9 @@ class Trainer:
                 print("Early stopping triggered.")
                 break
 
+            if self.device.type == 'mps':
+                torch.mps.empty_cache()
+
 
 def main():
     RUN_MODE = 'TEST'
@@ -345,11 +394,11 @@ def main():
             'mode': 'test',
             'train_years': list(range(2000, 2011)),
             'ensem_size': 1,
-            'batch_size': 64,
+            'batch_size': 128,
             'max_epoch': 10,
-            'lr': 1e-4,
-            'drop_prob': 0.3,
-            'conv_channels': [32, 64, 128],
+            'lr': 2e-4,
+            'drop_prob': 0.5,
+            'conv_channels': [32, 64, 128, 256],
         },
         'PRODUCTION': {
             'mode': 'production',
@@ -357,7 +406,7 @@ def main():
             'ensem_size': 5,
             'batch_size': 256,
             'max_epoch': 50,
-            'lr': 1e-5,
+            'lr': 1e-4,
             'drop_prob': 0.5,
             'conv_channels': [32, 64, 128, 256],
         }
@@ -367,21 +416,21 @@ def main():
         5: {
             'pw': 5,
             'filter_sizes': {
-                'TEST': [(3, 2), (3, 2), (3, 2)],
+                'TEST': [(3, 2), (3, 2), (3, 2), (3, 2)],
                 'PRODUCTION': [(3, 2), (3, 2), (3, 2), (3, 2)]
             }
         },
         20: {
             'pw': 20,
             'filter_sizes': {
-                'TEST': [(5, 3), (3, 3), (3, 3)],
+                'TEST': [(5, 3), (3, 3), (3, 3), (3, 3)],
                 'PRODUCTION': [(5, 3), (3, 3), (3, 3), (3, 3)]
             }
         },
         60: {
             'pw': 60,
             'filter_sizes': {
-                'TEST': [(5, 3), (5, 3), (3, 3)],
+                'TEST': [(5, 3), (5, 3), (3, 3), (3, 3)],
                 'PRODUCTION': [(5, 3), (5, 3), (3, 3), (3, 3)]
             }
         }
@@ -403,9 +452,6 @@ def main():
 
 
 def main_60d():
-    """
-    This function is used to train the model for 60d data in test mode, with ewer epochs.
-    """
     RUN_MODE = 'TEST'
 
     MODE_CONFIGS = {
@@ -413,9 +459,9 @@ def main_60d():
             'mode': 'test',
             'train_years': list(range(2000, 2011)),
             'ensem_size': 1,
-            'batch_size': 64,
-            'max_epoch': 3,
-            'lr': 1e-4,
+            'batch_size': 128,
+            'max_epoch': 5,
+            'lr': 2e-4,
             'drop_prob': 0.3,
             'conv_channels': [32, 64, 128],
         }
@@ -426,7 +472,7 @@ def main_60d():
     filter_sizes = [(5, 3), (5, 3), (3, 3)]
 
     print(f"\n{'='*25} TRAINING MODEL: {ws}d{pw}p {'='*25}")
-    print(f"--- Running in {RUN_MODE} MODE ---")
+    print(f"--- Running in {RUN_MODE} MODE (MacBook M1 Optimized) ---")
 
     config = MODE_CONFIGS[RUN_MODE].copy()
     config['filter_sizes'] = filter_sizes
@@ -437,4 +483,4 @@ def main_60d():
 
 
 if __name__ == "__main__":
-    main_60d()
+    main()
