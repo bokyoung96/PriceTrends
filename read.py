@@ -2,29 +2,31 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Optional, List
+from typing import Optional, List, Tuple
+
+
+def _get_image_height(intervals: int) -> int:
+    """Helper function to determine image height based on intervals."""
+    if intervals == 5:
+        return 32
+    if intervals == 20:
+        return 64
+    if intervals == 60:
+        return 96
+    raise ValueError(
+        f"Unsupported interval value: {intervals}. Supported values are 5, 20, 60.")
 
 
 class ChartViewer:
     def __init__(self, intervals: int, base_dir: str = 'Images') -> None:
         self.intervals = intervals
         self.base_dir = os.path.join(os.path.dirname(__file__), base_dir)
-        self.image_height = self._get_image_height(intervals)
+        self.image_height = _get_image_height(intervals)
         self.image_width = intervals * 3
         self.image_shape = (self.image_height, self.image_width)
 
         self.metadata: Optional[pd.DataFrame] = None
         self.images: Optional[np.ndarray] = None
-
-    def _get_image_height(self, intervals: int) -> int:
-        if intervals == 5:
-            return 32
-        if intervals == 20:
-            return 64
-        if intervals == 60:
-            return 96
-        raise ValueError(
-            f"Unsupported interval value: {intervals}. Supported values are 5, 20, 60.")
 
     def load_data(self) -> None:
         save_dir = os.path.join(self.base_dir, str(self.intervals))
@@ -44,7 +46,16 @@ class ChartViewer:
         self.metadata = pd.read_feather(metadata_filename)
 
         print(f"Memory-mapping images from: {npy_filename}")
-        self.images = np.load(npy_filename, mmap_mode='r')
+
+        num_images = len(self.metadata)
+        image_size = self.image_height * self.image_width
+
+        # Efficiently map and reshape the data without loading it all into RAM
+        memmap_flat = np.memmap(
+            npy_filename, dtype=np.uint8, mode='r', shape=(num_images, image_size))
+        self.images = memmap_flat.reshape(
+            (num_images, self.image_height, self.image_width))
+
         print(
             f"Loaded {self.images.shape[0]} images with shape {self.images.shape[1:]}.")
 
@@ -101,6 +112,19 @@ class ChartViewer:
             plt.show()
 
 
+def read_full(intervals: int) -> Tuple[np.ndarray, pd.DataFrame]:
+    try:
+        viewer = ChartViewer(intervals=intervals)
+        viewer.load_data()
+        if viewer.images is not None and viewer.metadata is not None:
+            return viewer.images, viewer.metadata
+        else:
+            return np.array([]), pd.DataFrame()
+    except (FileNotFoundError, ValueError, RuntimeError) as e:
+        print(f"Error: {e}")
+        return np.array([]), pd.DataFrame()
+
+
 def read_charts(ticker: str,
                 intervals: int,
                 chart_numbers: Optional[List[int]] = None) -> None:
@@ -116,3 +140,5 @@ if __name__ == "__main__":
     read_charts(ticker="A005930",
                 intervals=5,
                 chart_numbers=[270, 6090])
+
+    img, metadata = read_full(intervals=60)

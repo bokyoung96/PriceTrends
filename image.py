@@ -229,14 +229,21 @@ class ChartBatchProcessor:
         metadata_list = []
         image_counter = 0
 
+        ticker_date_ranges = {}
         total_combinations = 0
         for ticker in selected_tickers:
             ticker_dates = self.generator.ma_data[ticker].dropna().index
             max_idx = len(ticker_dates) - \
                 (2 * self.generator.config.intervals) - 1
-            total_combinations += max(0, max_idx)
+            if max_idx > 0:
+                ticker_date_ranges[ticker] = (ticker_dates, max_idx)
+                total_combinations += max_idx
 
         print(f"Total chart combinations to process: {total_combinations}")
+
+        if total_combinations == 0:
+            print("No valid chart combinations found to process.")
+            return
 
         save_dir = os.path.join(self.generator.config.img_save_dir, str(
             self.generator.config.intervals))
@@ -244,66 +251,82 @@ class ChartBatchProcessor:
         images_filename = os.path.join(
             save_dir, f'images_{self.generator.config.intervals}d.npy')
 
-        images_list = []
-        pbar = tqdm(total=total_combinations, desc="Generating charts")
+        image_height = self.generator.config.image_height
+        image_width = self.generator.config.intervals * 3
+        image_size = image_height * image_width
+
+        images_array = np.memmap(
+            images_filename, dtype=np.uint8, mode='w+', shape=(total_combinations, image_size))
+
+        pbar = tqdm(total=total_combinations,
+                    desc="Generating and saving charts")
 
         for ticker in selected_tickers:
-            ticker_dates = self.generator.ma_data[ticker].dropna().index
+            if ticker not in ticker_date_ranges:
+                continue
 
-            for i, start_date in enumerate(ticker_dates):
-                max_idx = len(ticker_dates) - \
-                    (2 * self.generator.config.intervals) - 1
+            ticker_dates, max_idx = ticker_date_ranges[ticker]
 
-                if i < max_idx:
-                    end_date = ticker_dates[i +
-                                            self.generator.config.intervals - 1]
-                    estimation_start = ticker_dates[i +
-                                                    self.generator.config.intervals]
-                    estimation_end = ticker_dates[i +
-                                                  self.generator.config.intervals + self.generator.config.intervals]
+            for i in range(max_idx):
+                start_date = ticker_dates[i]
+                end_date = ticker_dates[i +
+                                        self.generator.config.intervals - 1]
+                estimation_start = ticker_dates[i +
+                                                self.generator.config.intervals]
+                estimation_end = ticker_dates[i +
+                                              self.generator.config.intervals + self.generator.config.intervals]
 
-                    try:
-                        image, label = self.generator.generate_chart_image(
-                            ticker, start_date, end_date, estimation_start, estimation_end)
+                try:
+                    image, label = self.generator.generate_chart_image(
+                        ticker, start_date, end_date, estimation_start, estimation_end)
 
-                        images_list.append(np.array(image))
+                    images_array[image_counter] = np.array(image).flatten()
 
-                        metadata_list.append({
-                            'ticker': ticker,
-                            'start_date': start_date.strftime('%Y%m%d'),
-                            'end_date': end_date.strftime('%Y%m%d'),
-                            'estimation_start': estimation_start.strftime('%Y%m%d'),
-                            'estimation_end': estimation_end.strftime('%Y%m%d'),
-                            'label': label,
-                            'image_idx': image_counter
-                        })
-                        image_counter += 1
+                    metadata_list.append({
+                        'ticker': ticker,
+                        'start_date': start_date.strftime('%Y%m%d'),
+                        'end_date': end_date.strftime('%Y%m%d'),
+                        'estimation_start': estimation_start.strftime('%Y%m%d'),
+                        'estimation_end': estimation_end.strftime('%Y%m%d'),
+                        'label': label,
+                        'image_idx': image_counter
+                    })
+                    image_counter += 1
 
-                    except Exception as e:
-                        print(
-                            f"SKIP: {ticker} {start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')} | {str(e)}")
-                    finally:
-                        pbar.update(1)
+                except Exception as e:
+                    print(
+                        f"SKIP: {ticker} {start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')} | {str(e)}")
+                finally:
+                    pbar.update(1)
 
         pbar.close()
 
+        images_array.flush()
+        del images_array
+
         if image_counter == 0:
             print("No charts were successfully generated.")
+            if os.path.exists(images_filename):
+                os.remove(images_filename)
             return
 
-        images_array = np.array(images_list)
-        np.save(images_filename, images_array)
+        if image_counter < total_combinations:
+            print(f"Warning: Generated {image_counter} of {total_combinations} expected charts. "
+                  "The .npy file on disk is oversized, but this is handled correctly during loading.")
 
         metadata_df = pd.DataFrame(metadata_list)
         metadata_filename = os.path.join(
             save_dir, f'charts_{self.generator.config.intervals}d_metadata.feather')
-        metadata_df.to_feather(metadata_filename)
 
-        print(f"Saved {image_counter} charts to {save_dir}")
+        with tqdm(total=1, desc="Saving metadata") as pbar_meta:
+            metadata_df.to_feather(metadata_filename)
+            pbar_meta.update(1)
+
+        print(f"\nSaved {image_counter} charts to {save_dir}")
         print(f"Images: {images_filename}")
         print(f"Metadata: {metadata_filename}")
         print(
-            f"Image shape per chart: {self.generator.config.intervals * 3} x {self.generator.config.image_height}")
+            f"Image shape per chart: {image_width} x {image_height}")
 
     def load_batch_dataset(self, intervals: int, tickers: Optional[List[str]] = None) -> Tuple[np.ndarray, pd.DataFrame]:
         save_dir = os.path.join(
@@ -325,38 +348,43 @@ class ChartBatchProcessor:
             if len(metadata_df) == 0:
                 raise ValueError(f"No data found for tickers: {tickers}")
 
-        image_size = intervals * 3 * self.generator.config.image_height
-        file_size = os.path.getsize(images_filename)
-        total_images = file_size // image_size
+        if len(metadata_df) == 0:
+            print("No images to load based on metadata.")
+            return np.array([]), pd.DataFrame()
 
-        if file_size % image_size != 0:
-            print(
-                f"Warning: File size {file_size} is not perfectly divisible by image size {image_size}")
-            print(f"Expected {total_images} complete images")
+        image_height = self.generator.config.image_height
+        image_width = intervals * 3
+        image_size = image_width * image_height
 
-        print(f"Loading {len(metadata_df)} images from {images_filename}")
+        num_images_from_meta = len(metadata_df)
+
         print(
-            f"File contains {total_images} total images, image size: {image_size} bytes")
+            f"Loading {num_images_from_meta} images from {images_filename} based on metadata.")
 
         all_images = np.memmap(
             images_filename,
             dtype=np.uint8,
             mode='r',
-            shape=(total_images, image_size)
+            shape=(num_images_from_meta, image_size)
         )
 
         if tickers is not None:
             image_indices = metadata_df['image_idx'].values
-            max_idx = image_indices.max()
-            if max_idx >= total_images:
-                raise ValueError(
-                    f"Image index {max_idx} exceeds available images {total_images}")
-            images = all_images[image_indices]
+
+            original_memmap = np.memmap(
+                images_filename,
+                dtype=np.uint8,
+                mode='r'
+            ).reshape(-1, image_size)
+
+            images = original_memmap[image_indices]
+
             metadata_df = metadata_df.copy()
             metadata_df['image_idx'] = range(len(metadata_df))
         else:
-            images = all_images[:len(metadata_df)]
+            images = all_images
 
+        images = images.reshape(-1, image_height, image_width)
         print(f"Loaded images shape: {images.shape}")
         print(f"Loaded metadata shape: {metadata_df.shape}")
         return images, metadata_df
@@ -522,4 +550,4 @@ def run_single(ticker: str, intervals: int = 20):
 
 if __name__ == "__main__":
     # run_batch(frequencies=[5, 20, 60])
-    run_batch(frequencies=[5])
+    run_batch(frequencies=[20, 60])
