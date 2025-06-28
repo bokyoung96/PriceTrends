@@ -10,6 +10,8 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
+from params import CNNParams
+
 
 class KoreanEquityDataset(Dataset):
     def __init__(self, intervals: int, years: List[int], base_dir: str = 'Images') -> None:
@@ -388,98 +390,19 @@ class Trainer:
 
 def main():
     RUN_MODE = 'TEST'
+    params = CNNParams()
 
-    MODE_CONFIGS = {
-        'TEST': {
-            'mode': 'test',
-            'train_years': list(range(2000, 2011)),
-            'ensem_size': 1,
-            'batch_size': 128,
-            'max_epoch': 10,
-            'lr': 2e-4,
-            'drop_prob': 0.5,
-            'conv_channels': [32, 64, 128, 256],
-        },
-        'PRODUCTION': {
-            'mode': 'production',
-            'train_years': list(range(2000, 2011)),
-            'ensem_size': 5,
-            'batch_size': 256,
-            'max_epoch': 50,
-            'lr': 1e-4,
-            'drop_prob': 0.5,
-            'conv_channels': [32, 64, 128, 256],
-        }
-    }
-
-    WINDOW_CONFIGS = {
-        5: {
-            'pw': 5,
-            'filter_sizes': {
-                'TEST': [(3, 2), (3, 2), (3, 2), (3, 2)],
-                'PRODUCTION': [(3, 2), (3, 2), (3, 2), (3, 2)]
-            }
-        },
-        20: {
-            'pw': 20,
-            'filter_sizes': {
-                'TEST': [(5, 3), (3, 3), (3, 3), (3, 3)],
-                'PRODUCTION': [(5, 3), (3, 3), (3, 3), (3, 3)]
-            }
-        },
-        60: {
-            'pw': 60,
-            'filter_sizes': {
-                'TEST': [(5, 3), (5, 3), (3, 3), (3, 3)],
-                'PRODUCTION': [(5, 3), (5, 3), (3, 3), (3, 3)]
-            }
-        }
-    }
-
-    for ws, window_config in WINDOW_CONFIGS.items():
-        pw = window_config['pw']
+    for ws in params.window_sizes:
+        pw = params.config['window_configs'][str(ws)]['pw']
         print(f"\n{'='*25} TRAINING MODEL: {ws}d{pw}p {'='*25}")
         print(f"--- Running in {RUN_MODE} MODE ---")
 
-        config = MODE_CONFIGS[RUN_MODE].copy()
-        config['filter_sizes'] = window_config['filter_sizes'][RUN_MODE]
-
-        trainer = Trainer(ws=ws, pw=pw, config=config)
+        config = params.get_config(RUN_MODE, ws)
+        trainer = Trainer(ws=ws, pw=config['pw'], config=config)
 
         dataloaders = trainer.get_dataloaders(
             train_years=config['train_years'])
         trainer.train_empirical_ensem_model(dataloaders)
-
-
-def main_60d():
-    RUN_MODE = 'TEST'
-
-    MODE_CONFIGS = {
-        'TEST': {
-            'mode': 'test',
-            'train_years': list(range(2000, 2011)),
-            'ensem_size': 1,
-            'batch_size': 128,
-            'max_epoch': 5,
-            'lr': 2e-4,
-            'drop_prob': 0.3,
-            'conv_channels': [32, 64, 128],
-        }
-    }
-
-    ws = 60
-    pw = 60
-    filter_sizes = [(5, 3), (5, 3), (3, 3)]
-
-    print(f"\n{'='*25} TRAINING MODEL: {ws}d{pw}p {'='*25}")
-    print(f"--- Running in {RUN_MODE} MODE (MacBook M1 Optimized) ---")
-
-    config = MODE_CONFIGS[RUN_MODE].copy()
-    config['filter_sizes'] = filter_sizes
-
-    trainer = Trainer(ws=ws, pw=pw, config=config)
-    dataloaders = trainer.get_dataloaders(train_years=config['train_years'])
-    trainer.train_empirical_ensem_model(dataloaders)
 
 
 if __name__ == "__main__":

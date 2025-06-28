@@ -4,106 +4,96 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix, classification_report
 from tqdm import tqdm
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 
 from training import KoreanEquityDataset, CNNModel
+from params import CNNParams
 
 
-class ResultAggregator:
+class AccuracyResult:
     def __init__(self, results_dir: str = 'results'):
         self.results_dir = os.path.join(os.path.dirname(__file__), results_dir)
         os.makedirs(self.results_dir, exist_ok=True)
+        self.accuracy_summary = {}
 
-    def print_metrics(self, labels: pd.Series, predictions: pd.Series, model_name: str) -> None:
-        print(f"\n--- Evaluation Metrics for {model_name} ---")
+    def print_accuracy(self, labels: pd.Series, predictions: pd.Series, model_name: str) -> float:
+        accuracy = (labels == predictions).mean()
+        print(f"\n--- {model_name} Out-of-Sample Classification Accuracy ---")
+        print(f"Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
         print(classification_report(labels, predictions,
               target_names=['Down', 'Up'], zero_division=0))
-        print("Confusion Matrix:")
+
         cm = confusion_matrix(labels, predictions)
+        print("Confusion Matrix:")
         print(cm)
+        return accuracy
 
-    def process_and_save_results(self, results_by_ws: Dict[int, pd.DataFrame], window_sizes: List[int]) -> None:
-        if not results_by_ws:
-            print("No results to process.")
+    def save_res(self, model_name: str, df: pd.DataFrame) -> None:
+        if df.empty:
+            print(f"No results to save for {model_name}.")
             return
 
-        print("\n" + "="*25 + " INDIVIDUAL MODEL EVALUATION " + "="*25)
-        for ws, df in results_by_ws.items():
-            self.print_metrics(df['label'], df['prediction'], f"{ws}d Model")
+        print("\n" + "="*50)
+        print(f"RESULTS FOR {model_name}")
+        print("="*50)
 
-            individual_file = f"test_results_{ws}d.csv"
-            df.to_csv(os.path.join(self.results_dir,
-                      individual_file), index=False)
-            print(f"Individual {ws}d results saved to {individual_file}")
+        accuracy = self.print_accuracy(
+            df['label'], df['prediction'], model_name)
+        self.accuracy_summary[model_name] = accuracy
 
-        if len(results_by_ws) < 2:
-            print("\nInsufficient models for ensemble evaluation. Skipping.")
+        result_file = f"test_results_{model_name.lower().replace('/', '_')}.parquet"
+        df.to_parquet(os.path.join(self.results_dir, result_file), index=False)
+        print(f"Results saved to {result_file}")
+
+    def print_summary(self) -> None:
+        if not self.accuracy_summary:
+            print("\nNo results to summarize.")
             return
 
-        print("\n" + "="*25 + " ENSEMBLE MODEL EVALUATION " + "="*25)
-
-        sorted_ws = sorted(results_by_ws.keys())
-        base_df = results_by_ws[sorted_ws[0]]
-
-        for ws in sorted_ws[1:]:
-            merge_df = results_by_ws[ws]
-            base_df = pd.merge(
-                base_df.rename(columns=lambda c: f"{c}_{sorted_ws[0]}d" if c not in [
-                               'StockID', 'ending_date', 'label'] else c),
-                merge_df.rename(columns=lambda c: f"{c}_{ws}d" if c not in [
-                                'StockID', 'ending_date', 'label'] else c),
-                on=['StockID', 'ending_date', 'label']
-            )
-
-        confidence_cols = [
-            col for col in base_df.columns if 'confidence_up_' in col]
-        base_df['ensemble_confidence_up'] = base_df[confidence_cols].mean(
-            axis=1)
-        base_df['ensemble_prediction'] = (
-            base_df['ensemble_confidence_up'] > 0.5).astype(int)
-
-        self.print_metrics(base_df['label'], base_df['ensemble_prediction'],
-                           f"Ensemble ({'+'.join(map(str, sorted_ws))}d) Model")
-
-        window_str = '_'.join([f"{ws}d" for ws in sorted_ws])
-        ensemble_file = f"test_results_ensemble_{window_str}.csv"
-        base_df.to_csv(os.path.join(
-            self.results_dir, ensemble_file), index=False)
-        print(f"\nEnsemble results saved to {ensemble_file}")
+        print("\n" + "="*30 + " FINAL SUMMARY " + "="*30)
+        for model_name, accuracy in self.accuracy_summary.items():
+            print(f"{model_name}: {accuracy:.4f} ({accuracy*100:.2f}%)")
 
 
-class Evaluator:
-    def __init__(self, ws: int, pw: int, config: Dict) -> None:
-        self.ws = ws
-        self.pw = pw
+class ModelEvaluator:
+    def __init__(self, input_days: int, return_days: int, config: Dict) -> None:
+        self.input_days = input_days
+        self.return_days = return_days
         self.config = config
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu")
-        self.exp_name = f"korea_cnn_{ws}d{pw}p_{config['mode']}"
+        self.device = self._get_optimal_device()
+        self.model_name = f"I{input_days}/R{return_days}"
+        self.exp_name = f"korea_cnn_{input_days}d{return_days}p_{config['mode']}"
         self.model_dir = os.path.join(
             os.path.dirname(__file__), 'models', self.exp_name)
-        print(f"Using device: {self.device} for model {self.exp_name}")
+        print(f"Using device: {self.device} for model {self.model_name}")
+
+    def _get_optimal_device(self) -> torch.device:
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        else:
+            return torch.device("cpu")
 
     def get_test_dataloader(self) -> Optional[DataLoader]:
         try:
             test_dataset = KoreanEquityDataset(
-                self.ws, self.config['test_years'])
+                self.input_days, self.config['test_years'])
         except FileNotFoundError:
             print(
-                f"No data found for years {self.config['test_years']}. Skipping evaluation for ws={self.ws}.")
+                f"No data found for years {self.config['test_years']}. Skipping {self.model_name}.")
             return None
 
         if len(test_dataset) == 0:
-            print(
-                f"No data available for years {self.config['test_years']} in the dataset (ws={self.ws}). Skipping.")
+            print(f"No data available for {self.model_name}. Skipping.")
             return None
 
         test_loader = DataLoader(
             test_dataset, batch_size=self.config['batch_size'], shuffle=False, num_workers=0)
-        print(f"Test size for ws={self.ws}: {len(test_dataset)}")
+        print(f"Test size for {self.model_name}: {len(test_dataset)}")
         return test_loader
 
-    def generate_predictions(self) -> Optional[pd.DataFrame]:
+    def predict(self) -> Optional[pd.DataFrame]:
         test_loader = self.get_test_dataloader()
         if test_loader is None:
             return None
@@ -122,7 +112,7 @@ class Evaluator:
                 continue
 
             print(
-                f"\n--- Evaluating Ensemble Member {model_num + 1}/{self.config['ensem_size']} for ws={self.ws} ---")
+                f"Evaluating ensemble member {model_num + 1}/{self.config['ensem_size']} for {self.model_name}")
 
             model = CNNModel(
                 layer_number=len(self.config['conv_channels']),
@@ -141,112 +131,76 @@ class Evaluator:
             model.load_state_dict(checkpoint['model_state_dict'])
             model.eval()
 
-            model_outputs_per_run = []
-
-            desc = f"Predicting with model {model_num+1} (ws={self.ws})"
+            model_outputs = []
 
             with torch.no_grad():
-                for batch in tqdm(test_loader, desc=desc):
+                for batch in tqdm(test_loader, desc=f"Predicting {self.model_name}"):
                     inputs = batch['image'].to(self.device)
                     outputs = model(inputs)
-                    model_outputs_per_run.append(outputs.cpu())
+                    model_outputs.append(outputs.cpu())
 
                     if model_num == 0:
                         all_labels.append(batch['label'])
                         all_stock_ids.extend(batch['StockID'])
                         all_ending_dates.extend(batch['ending_date'])
 
-            all_outputs.append(torch.cat(model_outputs_per_run))
+            all_outputs.append(torch.cat(model_outputs))
 
         if not all_outputs:
-            print(f"No models were evaluated for ws={self.ws}. Exiting.")
+            print(f"No models evaluated for {self.model_name}.")
             return None
 
         ensemble_outputs = torch.stack(all_outputs).mean(dim=0)
-        _, preds = torch.max(ensemble_outputs, 1)
+        probabilities = torch.softmax(ensemble_outputs, dim=1)
+        predictions = (probabilities[:, 1] > 0.5).int()
         all_labels_tensor = torch.cat(all_labels)
 
         return pd.DataFrame({
             'StockID': all_stock_ids,
             'ending_date': all_ending_dates,
             'label': all_labels_tensor.numpy(),
-            'prediction': preds.numpy(),
-            'confidence_down': torch.softmax(ensemble_outputs, dim=1)[:, 0].numpy(),
-            'confidence_up': torch.softmax(ensemble_outputs, dim=1)[:, 1].numpy(),
+            'prediction': predictions.cpu().numpy(),
+            'prob_down': probabilities[:, 0].cpu().numpy(),
+            'prob_up': probabilities[:, 1].cpu().numpy(),
         })
 
 
 def main():
     RUN_MODE = 'TEST'
-    TEST_YEARS = list(range(2012, 2025))
-    EVALUATE_WINDOWS = [5, 20]
 
-    MODE_CONFIGS = {
-        'TEST': {
-            'mode': 'test',
-            'test_years': TEST_YEARS,
-            'ensem_size': 1,
-            'batch_size': 64,
-            'drop_prob': 0.3,
-            'conv_channels': [32, 64, 128],
-        },
-        'PRODUCTION': {
-            'mode': 'production',
-            'test_years': TEST_YEARS,
-            'ensem_size': 5,
-            'batch_size': 256,
-            'drop_prob': 0.5,
-            'conv_channels': [32, 64, 128, 256],
-        }
-    }
+    EVALUATION_CONFIGS = [
+        # (5, 5),    # I5/R5: 5-day input, 5-day return prediction
+        # (20, 20),  # I20/R20: 20-day input, 20-day return prediction
+        (60, 60),  # I60/R60: 60-day input, 60-day return prediction
+    ]
 
-    WINDOW_CONFIGS = {
-        5: {
-            'pw': 5,
-            'filter_sizes': {
-                'TEST': [(3, 2), (3, 2), (3, 2)],
-                'PRODUCTION': [(3, 2), (3, 2), (3, 2), (3, 2)]
-            }
-        },
-        20: {
-            'pw': 20,
-            'filter_sizes': {
-                'TEST': [(5, 3), (3, 3), (3, 3)],
-                'PRODUCTION': [(5, 3), (3, 3), (3, 3), (3, 3)]
-            }
-        },
-        60: {
-            'pw': 60,
-            'filter_sizes': {
-                'TEST': [(5, 3), (5, 3), (3, 3)],
-                'PRODUCTION': [(5, 3), (5, 3), (3, 3), (3, 3)]
-            }
-        }
-    }
+    params = CNNParams()
+    accuracy_result = AccuracyResult()
 
-    all_results = {}
-
-    for ws in EVALUATE_WINDOWS:
-        if ws not in WINDOW_CONFIGS:
+    for input_days, return_days in EVALUATION_CONFIGS:
+        if input_days not in params.window_sizes:
             print(
-                f"Warning: Window size {ws} not found in WINDOW_CONFIGS. Skipping.")
+                f"Warning: Input window {input_days} not in config. Skipping I{input_days}/R{return_days}.")
             continue
 
-        window_config = WINDOW_CONFIGS[ws]
-        pw = window_config['pw']
-        print(f"\n{'='*25} EVALUATING MODEL: {ws}d{pw}p {'='*25}")
-        print(f"--- Running in {RUN_MODE} MODE ---")
+        print(f"\n{'='*50}")
+        print(f"EVALUATING MODEL: I{input_days}/R{return_days}")
+        print(f"Input: {input_days} days, Return horizon: {return_days} days")
+        print(f"Running in {RUN_MODE} mode")
+        print("="*50)
 
-        config = MODE_CONFIGS[RUN_MODE].copy()
-        config['filter_sizes'] = window_config['filter_sizes'][RUN_MODE]
+        config = params.get_config(RUN_MODE, input_days)
+        config['test_years'] = params.get_test_years()
 
-        evaluator = Evaluator(ws=ws, pw=pw, config=config)
-        results_df = evaluator.generate_predictions()
+        evaluator = ModelEvaluator(
+            input_days=input_days, return_days=return_days, config=config)
+        results_df = evaluator.predict()
+
         if results_df is not None:
-            all_results[ws] = results_df
+            model_name = f"I{input_days}/R{return_days}"
+            accuracy_result.save_res(model_name, results_df)
 
-    aggregator = ResultAggregator()
-    aggregator.process_and_save_results(all_results, EVALUATE_WINDOWS)
+    accuracy_result.print_summary()
 
 
 if __name__ == "__main__":
