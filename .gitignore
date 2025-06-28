@@ -1,3 +1,6 @@
+# Ignore results
+/results
+
 # Ignore models
 /models
 
