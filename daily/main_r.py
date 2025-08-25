@@ -50,6 +50,7 @@ class PredictionResult:
     def __init__(self, predictor: RealTimePredictor, config: Config):
         self.config = config
         self.target_date = config.target_date
+        self.predictor = predictor
         
         ensemble = predictor.ensemble_avg or {}
         self.prob_up = self._extract_data(ensemble.get('prob_up'))
@@ -75,32 +76,41 @@ class PredictionResult:
                 if ticker in self.prob_up.index else {})
     
     def save(self):
-        if not self.config.save_results or self.prob_up.empty:
+        if not self.config.save_results:
             return
             
         results_dir = Path(self.config.results_dir)
         results_dir.mkdir(exist_ok=True)
         
-        df = pd.DataFrame({
-            'ticker': self.prob_up.index,
-            'prob_up': self.prob_up.values,
-            'prob_down': self.prob_down.values,
-            'prediction': self.prediction.values
-        }).sort_values('prob_up', ascending=False)
+        final_results = {}
         
-        csv_path = results_dir / f'pred_{self.target_date}.csv'
-        df.to_csv(csv_path, index=False)
+        if hasattr(self.predictor, 'all_results') and self.predictor.all_results:
+            for model_name, result_df in self.predictor.all_results.items():
+                if result_df is not None and not result_df.empty and 'prob_up' in result_df.columns:
+                    interval = model_name.replace('I', '')
+                    prob_up_series = result_df.set_index('StockID')['prob_up']
+                    final_results[f'{interval}d'] = prob_up_series
+        
+        if not self.prob_up.empty:
+            final_results['avg'] = self.prob_up
+        
+        if final_results:
+            combined_df = pd.DataFrame(final_results)
+            
+            excel_path = results_dir / f'pred_{self.target_date}.xlsx'
+            combined_df.to_excel(excel_path, index=True, sheet_name='Predictions')
+            print(f"All predictions saved: {excel_path}")
+            
+            print(f"Columns: {list(combined_df.columns)} | Stocks: {len(combined_df)}")
         
         summary = {
-            'date': self.target_date, 'model_count': self.model_count, 'stock_count': len(df),
-            'top_stocks': dict(self.top_stocks.apply(float)),
-            'bottom_stocks': dict(self.bottom_stocks.apply(float))
+            'date': self.target_date,
+            'intervals': list(final_results.keys()) if final_results else [],
+            'stock_count': len(final_results.get('avg', [])) if final_results else 0
         }
         
         with open(results_dir / f'summary_{self.target_date}.json', 'w') as f:
             json.dump(summary, f, indent=2)
-            
-        print(f"Results saved: {csv_path}")
 
 
 class StockPredictor:
