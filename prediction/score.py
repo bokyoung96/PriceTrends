@@ -4,6 +4,7 @@ from tqdm import tqdm
 from typing import Dict, List, Tuple
 from functools import cached_property
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class ResultLoader:

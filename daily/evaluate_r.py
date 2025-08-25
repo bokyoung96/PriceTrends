@@ -6,8 +6,8 @@ from PIL import Image
 from torch.utils.data import Dataset
 from typing import Dict, Optional, List, Union
 
-from evaluate import ModelEvaluator
-from params import CNNParams
+from prediction.evaluate import ModelEvaluator
+from core.params import CNNParams
 
 
 class RealTimeDataset(Dataset):
@@ -237,12 +237,17 @@ class RealTimePredictor:
 
 
 if __name__ == "__main__":
-    predictor = RealTimePredictor(target_date="20250731").execute()
-    print(predictor)
+    dates = ["20250822"]
+    all_prob_ups = {}
     
-    if predictor.ensemble_avg:
-        print("\nEnsemble 'prob_up':")
-        print(predictor.prob_up.head())
+    for date in dates:
+        print(f"\nProcessing date: {date}")
+        predictor = RealTimePredictor(target_date=date).execute()
         
-        print("\nIndividual model 'I20' predictions:")
-        print(predictor['I20']['prediction'].head()) 
+        if predictor.ensemble_avg and 'prob_up' in predictor.ensemble_avg:
+            prob_up_series = predictor.ensemble_avg['prob_up'].iloc[0]
+            all_prob_ups[date] = prob_up_series
+            print(f"Got {len(prob_up_series)} stocks for {date}")
+    
+    if all_prob_ups:
+        df = pd.DataFrame(all_prob_ups)

@@ -3,8 +3,8 @@ import pandas as pd
 from typing import Optional, List
 from tqdm import tqdm
 
-from W_price_trends.loader import DataLoader
-from W_price_trends.image import ChartConfig, MarketData, ChartGenerator
+from core.loader import DataLoader
+from prediction.image import ChartConfig, MarketData, ChartGenerator
 
 
 class RealTimeProcessor:
@@ -207,4 +207,10 @@ def run(target_date: str = "20250630", tickers: Optional[List[str]] = None, max_
 
 
 if __name__ == "__main__":
-    run(target_date="20250731", max_date_discrepancy_days=1) 
+    # run(target_date="20250131", max_date_discrepancy_days=1) 
+    # run(target_date='20250228', max_date_discrepancy_days=1)
+    # run(target_date='20250331', max_date_discrepancy_days=1)
+    # run(target_date='20250430', max_date_discrepancy_days=1)
+    # run(target_date='20250530', max_date_discrepancy_days=1)
+    # run(target_date='20250630', max_date_discrepancy_days=1)
+    run(target_date='20250822', max_date_discrepancy_days=1)

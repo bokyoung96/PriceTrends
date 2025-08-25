@@ -1,5 +1,9 @@
+# Images (daily)
+Images_r
+
 # Ignore results
-/results
+results
+results_d
 
 # Ignore models
 /models
