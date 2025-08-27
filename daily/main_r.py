@@ -19,7 +19,7 @@ class Config:
     intervals: List[int] = field(default_factory=lambda: [5, 20, 60])
     max_date_discrepancy: int = 1
     top_n: int = 10
-    skip_existing_images: bool = True
+    skip_existing_images: bool = False
     save_results: bool = True
     results_dir: str = "results_d"
 
@@ -42,8 +42,14 @@ class ImageProcessor:
         data_dict = {dtype: self.loader.to_pandas(self.loader.load(dtype)) 
                     for dtype in ["open", "low", "high", "close", "volume"]}
         
-        GenerateImages_r(**data_dict, max_date_discrepancy_days=self.config.max_date_discrepancy).generate_realtime_images(
-            target_date, tickers=self.config.tickers)
+        GenerateImages_r(
+            o_data=data_dict["open"],
+            l_data=data_dict["low"], 
+            h_data=data_dict["high"],
+            c_data=data_dict["close"],
+            v_data=data_dict["volume"],
+            max_date_discrepancy_days=self.config.max_date_discrepancy
+        ).generate_realtime_images(target_date, tickers=self.config.tickers)
 
 
 class PredictionResult:
@@ -175,4 +181,4 @@ def batch_predict(dates: List[str]) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    result = predict('20250822')
+    result = predict('20250825')

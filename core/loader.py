@@ -160,13 +160,13 @@ class DataLoader:
 if __name__ == "__main__":
     # NOTE: DATA CONVERTER
     converter = DataConverter(
-        excel_path=os.path.join(os.path.dirname(__file__), "DATA.xlsx"),
-        output_dir=os.path.join(os.path.dirname(__file__), "DATA")
+        excel_path=os.path.join(os.path.dirname(__file__), "..", "DATA", "DATA.xlsx"),
+        output_dir=os.path.join(os.path.dirname(__file__), "..", "DATA")
     )
     converter.data_convert()
 
     # NOTE: DATA LOADER
-    loader = DataLoader(data_dir=os.path.join(os.path.dirname(__file__), "DATA"))
+    loader = DataLoader(data_dir=os.path.join(os.path.dirname(__file__), "..", "DATA"))
     print("Available datasets:", loader.available())
     excluded = loader.get_excluded_tickers()
     if excluded:

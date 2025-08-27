@@ -176,7 +176,7 @@ class GenerateImages_r:
 def run(target_date: str = "20250630", tickers: Optional[List[str]] = None, max_date_discrepancy_days: int = 1):
     print(f"=== Running Real-Time Chart Generation for {target_date} ===")
     
-    loader = DataLoader(data_dir=os.path.join(os.path.dirname(__file__), "DATA"))
+    loader = DataLoader(data_dir=os.path.join(os.path.dirname(__file__), "..", "core", "DATA"))
     print("Available datasets:", loader.available())
     
     open_data = loader.load("open")
@@ -213,4 +213,4 @@ if __name__ == "__main__":
     # run(target_date='20250430', max_date_discrepancy_days=1)
     # run(target_date='20250530', max_date_discrepancy_days=1)
     # run(target_date='20250630', max_date_discrepancy_days=1)
-    run(target_date='20250822', max_date_discrepancy_days=1)
+    run(target_date='20250825', max_date_discrepancy_days=1)
