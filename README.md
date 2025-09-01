@@ -12,6 +12,7 @@ This project implements an innovative approach to financial market prediction by
 - **Multi-Timeframe Analysis**: Supports 5-day, 20-day, and 60-day prediction windows
 - **Ensemble Learning**: Combines multiple CNN models for robust predictions
 - **Production-Ready Pipeline**: Complete data processing, training, and evaluation workflow
+- **Daily Rebalancing**: Real-time prediction system for daily portfolio updates
 
 ## 🏗️ Architecture
 
@@ -21,27 +22,26 @@ This project implements an innovative approach to financial market prediction by
 Excel Data → Parquet Conversion → Chart Images → CNN Training → Prediction → Results
 ```
 
-### Core Components
+### Core Modules
 
-1. **Data Processing** (`loader.py`)
-   - Converts Excel market data to efficient Parquet format
-   - Handles data validation and filtering
+#### 1. **Core Module** (`core/`)
+- `loader.py`: Data loading and parquet conversion utilities
+- `params.py`: Configuration and hyperparameter management  
+- `training.py`: CNN model architecture and training logic
 
-2. **Image Generation** (`image.py`)
-   - Transforms price data into chart images
-   - Includes OHLCV visualization with moving averages
+#### 2. **Prediction Module** (`prediction/`)
+- `image.py`: Batch chart image generation from price data
+- `evaluate.py`: Model evaluation and prediction generation
+- `score.py`: Results processing and ensemble averaging
 
-3. **Model Training** (`training.py`)
-   - CNN architecture optimized for chart pattern recognition
-   - Ensemble training with multiple model instances
+#### 3. **Daily Module** (`daily/`)
+- `main_r.py`: Daily rebalancing orchestrator
+- `image_r.py`: Real-time chart generation for current dates
+- `evaluate_r.py`: Daily prediction pipeline
 
-4. **Evaluation** (`evaluate.py`)
-   - Generates prediction probabilities
-   - Calculates model performance metrics
-
-5. **Results Processing** (`score.py`)
-   - Converts predictions to pivot table format
-   - Provides ensemble averaging across timeframes
+#### 4. **Utils Module** (`utils/`)
+- `read.py`: Chart visualization and debugging tools
+- `score_w.py`: Score writing utilities
 
 ## 📊 Model Architecture
 
@@ -67,38 +67,58 @@ pip install torch pandas numpy matplotlib pillow pyarrow
 
 1. **Data Preparation**
 ```python
-from loader import DataConverter
-converter = DataConverter("DATA.xlsx", "DATA/")
+from core.loader import DataConverter
+converter = DataConverter("DATA/DATA.xlsx", "DATA/")
 converter.data_convert()
 ```
 
-2. **Image Generation**
+2. **Batch Image Generation**
 ```python
-from image import ChartBatchProcessor
+from prediction.image import ChartBatchProcessor
 processor = ChartBatchProcessor()
 processor.generate_batch_dataset()
 ```
 
 3. **Model Training**
 ```python
-from training import Trainer
+from core.training import Trainer
+from core.params import CNNParams
+
+params = CNNParams()
+config = params.get_config("TEST", 5)  # Test mode, 5-day window
 trainer = Trainer()
 trainer.train_empirical_ensem_model()
 ```
 
-4. **Prediction**
+4. **Batch Prediction**
 ```python
-from evaluate import ModelEvaluator
+from prediction.evaluate import ModelEvaluator
 evaluator = ModelEvaluator(input_days=5, return_days=5, config=config)
 predictions = evaluator.predict()
 ```
 
 5. **Results Analysis**
 ```python
-from score import ResultLoader
+from prediction.score import ResultLoader
 loader = ResultLoader()
 final_scores = loader.avg_prob  # Ensemble predictions
 ```
+
+## 📅 Daily Rebalancing
+
+For real-time daily predictions:
+
+```python
+from daily.main_r import main
+
+# Run daily pipeline for specific date
+main(end_date="20250825", timeframes=[5, 20, 60])
+```
+
+This will:
+1. Generate chart images for the current date
+2. Run predictions using pre-trained models
+3. Save results to `daily/results_d/`
 
 ## ⚙️ Configuration
 
@@ -128,9 +148,9 @@ final_scores = loader.avg_prob  # Ensemble predictions
 
 ### Parameter Management
 ```python
-from params import CNNParams
+from core.params import CNNParams
 params = CNNParams()
-config = params.get_config("TEST", 5)  # Test mode, 5-day window
+config = params.get_config("PRODUCTION", 20)  # Production mode, 20-day window
 ```
 
 ## 📈 Output Format
@@ -147,11 +167,10 @@ The system generates probability scores for each stock-date combination:
 | `prediction` | Binary prediction (0/1) |
 | `label` | Actual outcome (0/1) |
 
-### Final Ensemble Scores
+### Daily Predictions
 ```python
-# Pivot table format: Date × Stock × Probability
-final_scores = loader.avg_prob
-# Shape: (dates, stocks) with values 0-1
+# Excel output: daily/results_d/pred_YYYYMMDD.xlsx
+# JSON summary: daily/results_d/summary_YYYYMMDD.json
 ```
 
 ## 🔧 Advanced Usage
@@ -159,19 +178,23 @@ final_scores = loader.avg_prob
 ### Custom Timeframes
 ```python
 # Train custom window size
+from core.params import CNNParams
+params = CNNParams()
 config = params.get_config("PRODUCTION", 10)  # 10-day window
 ```
 
 ### Model Evaluation
 ```python
 # Load specific model results
+from prediction.score import ResultLoader
+loader = ResultLoader()
 results = loader.load_results(5, 5)  # 5-day input, 5-day return
 prob_up = results['prob_up']  # Pivot table of up probabilities
 ```
 
 ### Chart Visualization
 ```python
-from read import ChartViewer
+from utils.read import ChartViewer
 viewer = ChartViewer(intervals=5)
 viewer.display_charts("A005930", [270, 6090])  # Samsung Electronics
 ```
@@ -180,19 +203,36 @@ viewer.display_charts("A005930", [270, 6090])  # Samsung Electronics
 
 ```
 PriceTrends/
-├── params.py           # Configuration management
-├── config.json         # Model hyperparameters
-├── loader.py           # Data loading and conversion
-├── image.py            # Chart image generation
-├── training.py         # CNN model training
-├── evaluate.py         # Model evaluation and prediction
-├── score.py            # Results processing and analysis
-├── read.py             # Chart visualization tools
-├── pipeline.md         # Detailed pipeline documentation
-├── DATA/               # Processed market data
-├── Images/             # Generated chart images
-├── models/             # Trained model checkpoints
-└── results/            # Prediction outputs
+├── core/                    # Core functionality
+│   ├── __init__.py
+│   ├── loader.py           # Data loading and conversion
+│   ├── params.py           # Configuration management
+│   └── training.py         # CNN model training
+│
+├── prediction/             # Batch prediction system
+│   ├── __init__.py
+│   ├── image.py           # Batch chart generation
+│   ├── evaluate.py        # Model evaluation
+│   └── score.py           # Results processing
+│
+├── daily/                  # Daily rebalancing system
+│   ├── __init__.py
+│   ├── main_r.py          # Daily pipeline orchestrator
+│   ├── image_r.py         # Real-time chart generation
+│   ├── evaluate_r.py      # Daily prediction logic
+│   ├── Images_r/          # Daily chart images
+│   └── results_d/         # Daily predictions
+│
+├── utils/                  # Utility functions
+│   ├── __init__.py
+│   ├── read.py            # Visualization tools
+│   └── score_w.py         # Score utilities
+│
+├── DATA/                   # Market data (parquet files)
+├── Images/                 # Generated chart images
+├── models/                 # Trained model checkpoints
+├── config.json            # Model hyperparameters
+└── pipeline.md            # Detailed documentation
 ```
 
 ## 🎯 Performance Metrics
@@ -201,23 +241,27 @@ The system evaluates performance using:
 - **Accuracy**: Overall prediction correctness
 - **Precision/Recall**: For up/down trend classification
 - **Ensemble Stability**: Cross-model prediction consistency
+- **Daily Tracking**: Real-time prediction accuracy
 
 ## 🔬 Technical Details
 
 ### Data Processing
 - **Input**: OHLCV data from KOSPI200 constituents
 - **Preprocessing**: Invalid ticker filtering, data validation
+- **Storage**: Efficient parquet format for fast I/O
 - **Output**: Normalized chart images with volume indicators
 
 ### Model Training
 - **Framework**: PyTorch
 - **Optimization**: Adam optimizer with learning rate scheduling
 - **Regularization**: Dropout, BatchNorm, early stopping
+- **Checkpointing**: Best model saving based on validation loss
 
 ### Prediction Pipeline
 - **Ensemble Method**: Average of multiple model outputs
 - **Probability Calibration**: Softmax normalization
 - **Time Alignment**: Synchronized predictions across timeframes
+- **Batch Processing**: Efficient GPU utilization
 
 ## 📚 References
 
