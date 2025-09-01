@@ -5,9 +5,6 @@ Images_r
 results
 results_d
 
-# Ignore models
-/models
-
 # Ignore DS_Store
 .DS_Store
 ._.DS_Store
