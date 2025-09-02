@@ -40,23 +40,26 @@ class DataConverter:
             "수정고가": "high", 
             "수정저가": "low",
             "수정주가": "close",
+            "시가": "open",
+            "고가": "high",
+            "저가": "low",
+            "종가": "close",
             "거래량": "volume"
         }
         
-        target_korean = None
+        target_koreans = []
         for korean, english in type_mapping.items():
             if english == target_type:
-                target_korean = korean
-                break
+                target_koreans.append(korean)
                 
-        if target_korean is None:
+        if not target_koreans:
             return pd.DataFrame()
             
         result_data = {}
         col_idx = 0
         
         for i, data_type in enumerate(data_types):
-            if pd.notna(data_type) and data_type.strip() == target_korean:
+            if pd.notna(data_type) and data_type.strip() in target_koreans:
                 if col_idx < len(tickers):
                     ticker = tickers[col_idx]
                     if pd.notna(ticker) and ticker not in self.excluded_tickers:
