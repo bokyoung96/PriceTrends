@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any
 
 class CNNParams:
     def __init__(self, config_path: str = None) -> None:
@@ -16,7 +16,7 @@ class CNNParams:
         
         config = mode_config.copy()
         config.update(window_config)
-        config['filter_sizes'] = [tuple(fs) for fs in window_config['filter_sizes'][mode]]
+        config['filter_sizes'] = [tuple[Any, ...](fs) for fs in window_config['filter_sizes'][mode]]
         return config
     
     def get_test_years(self) -> List[int]:
@@ -24,7 +24,7 @@ class CNNParams:
     
     @property
     def modes(self) -> List[str]:
-        return list(self.config['mode_configs'].keys())
+        return list[str](self.config['mode_configs'].keys())
     
     @property
     def window_sizes(self) -> List[int]:

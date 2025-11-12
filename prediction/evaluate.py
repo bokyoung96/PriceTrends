@@ -8,7 +8,7 @@ from typing import Dict, Optional
 
 from core.training import KoreanEquityDataset, CNNModel
 from core.params import CNNParams
-from core.trainer import DeviceSelector
+from core.device import DeviceSelector
 
 
 class AccuracyResult:
