@@ -8,6 +8,7 @@ from typing import Dict, Optional
 
 from core.training import KoreanEquityDataset, CNNModel
 from core.params import CNNParams
+from core.trainer import DeviceSelector
 
 
 class AccuracyResult:
@@ -60,20 +61,13 @@ class ModelEvaluator:
         self.input_days = input_days
         self.return_days = return_days
         self.config = config
-        self.device = self._get_optimal_device()
+        selector = DeviceSelector()
+        self.device = selector.resolve()
         self.model_name = f"I{input_days}/R{return_days}"
         self.exp_name = f"korea_cnn_{input_days}d{return_days}p_{config['mode']}"
         self.model_dir = os.path.join(
             os.path.dirname(__file__), '..', 'models', self.exp_name)
-        print(f"Using device: {self.device} for model {self.model_name}")
-
-    def _get_optimal_device(self) -> torch.device:
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return torch.device("mps")
-        else:
-            return torch.device("cpu")
+        print(selector.summary(self.model_name))
 
     def get_test_dataloader(self) -> Optional[DataLoader]:
         try:

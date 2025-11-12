@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 import numpy as np
@@ -10,18 +12,27 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+IMAGES_ROOT = ROOT / "Images"
+MODELS_ROOT = ROOT / "models"
+
 from core.params import CNNParams
+from core.trainer import DeviceSelector
 
 
 class KoreanEquityDataset(Dataset):
-    def __init__(self, intervals: int, years: List[int], base_dir: str = 'Images') -> None:
+    def __init__(self, intervals: int, years: List[int], base_dir: Optional[str] = None) -> None:
         self.intervals = intervals
-        self.base_dir = os.path.join(os.path.dirname(__file__), base_dir, str(self.intervals))
+        resolved_base = Path(base_dir) if base_dir is not None else IMAGES_ROOT
+        if not resolved_base.is_absolute():
+            resolved_base = (ROOT / resolved_base).resolve()
+        self.base_dir = resolved_base / str(self.intervals)
         
-        metadata_path = os.path.join(self.base_dir, f'charts_{self.intervals}d_metadata.feather')
-        images_path = os.path.join(self.base_dir, f'images_{self.intervals}d.npy')
+        metadata_path = self.base_dir / f'charts_{self.intervals}d_metadata.feather'
+        images_path = self.base_dir / f'images_{self.intervals}d.npy'
 
-        if not os.path.exists(metadata_path) or not os.path.exists(images_path):
+        if not metadata_path.exists() or not images_path.exists():
             raise FileNotFoundError(f"Data files not found in {self.base_dir}. Please run convert_data.py first.")
 
         all_metadata = pd.read_feather(metadata_path)
@@ -207,11 +218,12 @@ class Trainer:
         self.pw = pw
         self.config = config
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
+        selector = DeviceSelector()
+        self.device = selector.resolve()
+        print(selector.summary("Trainer"))
 
         self.exp_name = f"korea_cnn_{ws}d{pw}p_{config['mode']}"
-        self.model_dir = os.path.join(os.path.dirname(__file__), 'models', self.exp_name)
+        self.model_dir = MODELS_ROOT / self.exp_name
         os.makedirs(self.model_dir, exist_ok=True)
 
     def get_dataloaders(self, train_years: List[int], train_ratio: float = 0.7) -> Dict[str, DataLoader]:
@@ -237,7 +249,7 @@ class Trainer:
     def train_empirical_ensem_model(self, dataloaders_dict: Dict[str, DataLoader]) -> None:
         for model_num in range(self.config['ensem_size']):
             print(f"\n--- Training Ensemble Member {model_num + 1}/{self.config['ensem_size']} ---")
-            model_save_path = os.path.join(self.model_dir, f"checkpoint{model_num}.pth.tar")
+            model_save_path = self.model_dir / f"checkpoint{model_num}.pth.tar"
             self.train_single_model(dataloaders_dict, model_save_path)
 
     def train_single_model(self, dataloaders_dict: Dict[str, DataLoader], model_save_path: str) -> None:
@@ -315,7 +327,7 @@ class Trainer:
 
 
 def main():
-    RUN_MODE = 'PRODUCTION'
+    RUN_MODE = 'TEST'
     params = CNNParams()
 
     for ws in params.window_sizes:

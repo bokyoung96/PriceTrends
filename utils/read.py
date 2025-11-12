@@ -1,14 +1,20 @@
 import os
-import pandas as pd
-import numpy as np
+from pathlib import Path
+from typing import List, Optional
+
 import matplotlib.pyplot as plt
-from typing import Optional, List
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_IMAGE_DIR = ROOT / "prediction" / "Images"
 
 
 class ChartViewer:
-    def __init__(self, intervals: int, base_dir: str = 'Images') -> None:
+    def __init__(self, intervals: int, base_dir: Optional[str] = None) -> None:
         self.intervals = intervals
-        self.base_dir = os.path.join(os.path.dirname(__file__), base_dir)
+        base_path = Path(base_dir) if base_dir is not None else DEFAULT_IMAGE_DIR
+        self.base_dir = str(base_path)
         self.image_height = self._get_image_height(intervals)
         self.image_width = intervals * 3
         self.image_shape = (self.image_height, self.image_width)
@@ -88,22 +94,22 @@ class ChartViewer:
             plt.axis('off')
             plt.show()
 
-def read_charts(ticker: str, 
-                intervals: int, 
-                chart_numbers: Optional[List[int]] = None) -> None:
+def read_charts(
+    ticker: str, intervals: int, chart_numbers: Optional[List[int]] = None, base_dir: Optional[str] = None
+) -> None:
     try:
-        viewer = ChartViewer(intervals=intervals)
+        viewer = ChartViewer(intervals=intervals, base_dir=base_dir)
         viewer.load_data()
         viewer.display_charts(ticker=ticker, chart_numbers=chart_numbers)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"Error: {e}")
 
-def load_full_dataset(intervals: int, base_dir: str = 'Images') -> tuple[np.ndarray, pd.DataFrame]:
-    base_path = os.path.join(os.path.dirname(__file__), base_dir)
-    save_dir = os.path.join(base_path, str(intervals))
+def load_full_dataset(intervals: int, base_dir: Optional[str] = None) -> tuple[np.ndarray, pd.DataFrame]:
+    base_path = Path(base_dir) if base_dir is not None else DEFAULT_IMAGE_DIR
+    save_dir = base_path / str(intervals)
     
-    metadata_filename = os.path.join(save_dir, f'charts_{intervals}d_metadata.feather')
-    npy_filename = os.path.join(save_dir, f'images_{intervals}d.npy')
+    metadata_filename = save_dir / f'charts_{intervals}d_metadata.feather'
+    npy_filename = save_dir / f'images_{intervals}d.npy'
     
     if not os.path.exists(metadata_filename):
         raise FileNotFoundError(f"Metadata file not found: {metadata_filename}")
@@ -140,7 +146,7 @@ def load_full_dataset(intervals: int, base_dir: str = 'Images') -> tuple[np.ndar
 
 if __name__ == "__main__":
     read_charts(ticker="A005930", 
-                intervals=5, 
+                intervals=60, 
                 chart_numbers=[270, 6090])
     
-    images, metadata = load_full_dataset(intervals=5)
+    # images, metadata = load_full_dataset(intervals=5)
