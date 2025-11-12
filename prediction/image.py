@@ -1,10 +1,17 @@
 import os
+import sys
 import numpy as np
 import pandas as pd
-from typing import Tuple, Optional, List
+from pathlib import Path
+from typing import Tuple, Optional, List, Dict
 from dataclasses import dataclass
 from PIL import Image, ImageDraw
 from tqdm import tqdm
+from numpy.lib.format import open_memmap
+
+ROOT = Path(__file__).resolve().parents[1]
+IMG_ROOT = ROOT / "Images"
+sys.path.insert(0, str(ROOT))
 
 from core.loader import DataLoader
 
@@ -14,11 +21,12 @@ class ChartConfig:
     intervals: int = 5
     image_height: int = 32
     include_ma: bool = True
+    ma_windows: Optional[Tuple[int, ...]] = None
     include_volume: bool = True
     background_color: int = 0
     chart_color: int = 255
     volume_chart_gap: int = 1
-    img_save_dir: str = os.path.join(os.path.dirname(__file__), 'Images')
+    img_save_dir: str = str(IMG_ROOT)
 
 
 @dataclass(frozen=True)
@@ -48,13 +56,62 @@ class ChartGenerator:
                  config: ChartConfig = ChartConfig()) -> None:
         self.market_data = market_data
         self.config = config
-        self._ma_data: Optional[pd.DataFrame] = None
+        self._ma_data_cache: Dict[int, pd.DataFrame] = {}
+        self._ma_windows: Tuple[int, ...] = self._get_ma_windows()
 
     @property
     def ma_data(self) -> pd.DataFrame:
-        if self._ma_data is None:
-            self._ma_data = self.market_data.close.rolling(window=self.config.intervals).mean()
-        return self._ma_data
+        primary_window = self._ma_windows[0] if self._ma_windows else self.config.intervals
+        return self._get_ma_data(primary_window)
+
+    @property
+    def ma_windows(self) -> Tuple[int, ...]:
+        return self._ma_windows
+
+    def _get_ma_windows(self) -> Tuple[int, ...]:
+        if not self.config.include_ma:
+            return ()
+
+        if self.config.ma_windows:
+            ordered_windows = []
+            seen = set()
+            for window in self.config.ma_windows:
+                if window is None:
+                    continue
+                if not isinstance(window, int):
+                    raise ValueError("MA window sizes must be integers")
+                if window <= 0:
+                    raise ValueError("MA window sizes must be positive integers")
+                if window in seen:
+                    continue
+                seen.add(window)
+                ordered_windows.append(window)
+            if not ordered_windows:
+                return (self.config.intervals,)
+            return tuple(ordered_windows)
+
+        return (self.config.intervals,)
+
+    def _get_ma_data(self, window: int) -> pd.DataFrame:
+        if window not in self._ma_data_cache:
+            self._ma_data_cache[window] = self.market_data.close.rolling(window=window).mean()
+        return self._ma_data_cache[window]
+
+    def get_valid_start_dates(self, ticker: str) -> pd.Index:
+        if len(self.market_data.close.index) == 0:
+            return self.market_data.close.index
+
+        min_start = max(self.config.intervals - 1, 0)
+        candidate_index = self.market_data.close.index[min_start:]
+
+        if not self._ma_windows:
+            return candidate_index
+
+        valid_index = candidate_index
+        for window in self._ma_windows:
+            ma_series = self._get_ma_data(window)[ticker].dropna()
+            valid_index = valid_index.intersection(ma_series.index)
+        return valid_index
 
     def _extract_arrays(self, ticker: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> np.ndarray:
         date_slice = slice(start_date, end_date)
@@ -66,8 +123,9 @@ class ChartGenerator:
             self.market_data.close.loc[date_slice, ticker].values,
         ]
         
-        if self.config.include_ma:
-            arrays.append(self.ma_data.loc[date_slice, ticker].values)
+        if self._ma_windows:
+            for window in self._ma_windows:
+                arrays.append(self._get_ma_data(window).loc[date_slice, ticker].values)
         
         if self.config.include_volume:
             arrays.append(self.market_data.volume.loc[date_slice, ticker].values)  
@@ -145,7 +203,9 @@ class ChartGenerator:
         try:
             arrays = self._extract_arrays(ticker, start_date, end_date)
             
-            price_arrays_to_check = arrays[:5] if self.config.include_ma and len(arrays) > 4 else arrays[:4]
+            ma_array_count = len(self._ma_windows)
+            price_array_count = 4 + ma_array_count
+            price_arrays_to_check = arrays[:price_array_count]
             if np.isnan(price_arrays_to_check).any():
                 raise ValueError("Price or MA data contains NaN, skipping chart.")
             
@@ -153,7 +213,7 @@ class ChartGenerator:
             
             total_height, price_height, volume_height = self._calculate_heights()
             
-            price_arrays_to_normalize = arrays[:5] if self.config.include_ma and len(arrays) > 4 else arrays[:4]
+            price_arrays_to_normalize = arrays[:price_array_count]
             normalized_data = self._normalize_price_data(price_arrays_to_normalize, price_height, volume_height).astype(int)
             normalized_prices = normalized_data[:4]
             
@@ -161,9 +221,10 @@ class ChartGenerator:
             
             self._draw_ohlc_chart(draw, normalized_prices, data_length)
             
-            if self.config.include_ma and len(normalized_data) > 4:
-                normalized_ma = normalized_data[4]
-                self._draw_ma_line(draw, normalized_ma, data_length)
+            if ma_array_count:
+                normalized_ma_arrays = normalized_data[4:]
+                for ma_series in normalized_ma_arrays:
+                    self._draw_ma_line(draw, ma_series, data_length)
             
             if self.config.include_volume:
                 volume_data = self._normalize_volume_data(arrays[-1], volume_height).astype(int)
@@ -207,65 +268,93 @@ class ChartBatchProcessor:
         selected_tickers = tickers if tickers is not None else all_tickers
         
         print(f"Processing {len(selected_tickers)} tickers with {self.generator.config.intervals}-day intervals.")
+        if self.generator.ma_windows:
+            print(f"Using MA windows: {self.generator.ma_windows}")
         
         metadata_list = []
         image_counter = 0
         
         total_combinations = 0
+        ticker_windows: Dict[str, Tuple[pd.Index, int]] = {}
         for ticker in selected_tickers:
-            ticker_dates = self.generator.ma_data[ticker].dropna().index
+            ticker_dates = self.generator.get_valid_start_dates(ticker)
             max_idx = len(ticker_dates) - (2 * self.generator.config.intervals) - 1
             total_combinations += max(0, max_idx)
+            ticker_windows[ticker] = (ticker_dates, max_idx)
         
         print(f"Total chart combinations to process: {total_combinations}")
 
+        if total_combinations <= 0:
+            print("No chart combinations were found for the given configuration.")
+            return
+        
         save_dir = os.path.join(self.generator.config.img_save_dir, str(self.generator.config.intervals))
         os.makedirs(save_dir, exist_ok=True)
         images_filename = os.path.join(save_dir, f'images_{self.generator.config.intervals}d.npy')
+        temp_images_filename = images_filename + '.tmp'
         
-        images_list = []
-        pbar = tqdm(total=total_combinations, desc="Generating charts")
+        if os.path.exists(temp_images_filename):
+            os.remove(temp_images_filename)
         
-        for ticker in selected_tickers:
-            ticker_dates = self.generator.ma_data[ticker].dropna().index
+        image_height = self.generator.config.image_height
+        image_width = self.generator.config.intervals * 3
+        
+        images_mmap: Optional[np.memmap] = None
+        try:
+            images_mmap = open_memmap(
+                temp_images_filename,
+                mode='w+',
+                dtype=np.uint8,
+                shape=(total_combinations, image_height, image_width)
+            )
             
-            for i, start_date in enumerate(ticker_dates):
-                max_idx = len(ticker_dates) - (2 * self.generator.config.intervals) - 1
-                
-                if i < max_idx:
-                    end_date = ticker_dates[i + self.generator.config.intervals - 1]
-                    estimation_start = ticker_dates[i + self.generator.config.intervals]
-                    estimation_end = ticker_dates[i + self.generator.config.intervals + self.generator.config.intervals]
+            pbar = tqdm(total=total_combinations, desc="Generating charts")
+            try:
+                for ticker in selected_tickers:
+                    ticker_dates, max_idx = ticker_windows[ticker]
                     
-                    try:
-                        image, label = self.generator.generate_chart_image(ticker, start_date, end_date, estimation_start, estimation_end)
-                        
-                        images_list.append(np.array(image))
-                        
-                        metadata_list.append({
-                            'ticker': ticker,
-                            'start_date': start_date.strftime('%Y%m%d'),
-                            'end_date': end_date.strftime('%Y%m%d'),
-                            'estimation_start': estimation_start.strftime('%Y%m%d'),
-                            'estimation_end': estimation_end.strftime('%Y%m%d'),
-                            'label': label,
-                            'image_idx': image_counter
-                        })
-                        image_counter += 1
-                        
-                    except Exception as e:
-                        print(f"SKIP: {ticker} {start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')} | {str(e)}")
-                    finally:
-                        pbar.update(1)
-
-        pbar.close()
+                    for i, start_date in enumerate(ticker_dates):
+                        if i < max_idx:
+                            end_date = ticker_dates[i + self.generator.config.intervals - 1]
+                            estimation_start = ticker_dates[i + self.generator.config.intervals]
+                            estimation_end = ticker_dates[i + self.generator.config.intervals + self.generator.config.intervals]
+                            
+                            try:
+                                image, label = self.generator.generate_chart_image(ticker, start_date, end_date, estimation_start, estimation_end)
+                                
+                                images_mmap[image_counter] = np.asarray(image, dtype=np.uint8)
+                                
+                                metadata_list.append({
+                                    'ticker': ticker,
+                                    'start_date': start_date.strftime('%Y%m%d'),
+                                    'end_date': end_date.strftime('%Y%m%d'),
+                                    'estimation_start': estimation_start.strftime('%Y%m%d'),
+                                    'estimation_end': estimation_end.strftime('%Y%m%d'),
+                                    'label': label,
+                                    'image_idx': image_counter
+                                })
+                                image_counter += 1
+                                
+                            except Exception as e:
+                                print(f"SKIP: {ticker} {start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')} | {str(e)}")
+                            finally:
+                                pbar.update(1)
+            finally:
+                pbar.close()
+            
+            if image_counter == 0:
+                print("No charts were successfully generated.")
+                return
+            
+            images_mmap.flush()
+            with open(images_filename, 'wb') as out_f:
+                np.save(out_f, images_mmap[:image_counter], allow_pickle=False)
         
-        if image_counter == 0:
-            print("No charts were successfully generated.")
-            return
-        
-        images_array = np.array(images_list)
-        np.save(images_filename, images_array)
+        finally:
+            if images_mmap is not None:
+                del images_mmap
+            if os.path.exists(temp_images_filename):
+                os.remove(temp_images_filename)
         
         metadata_df = pd.DataFrame(metadata_list)
         metadata_filename = os.path.join(save_dir, f'charts_{self.generator.config.intervals}d_metadata.feather')
@@ -294,23 +383,9 @@ class ChartBatchProcessor:
             if len(metadata_df) == 0:
                 raise ValueError(f"No data found for tickers: {tickers}")
         
-        image_size = intervals * 3 * self.generator.config.image_height
-        file_size = os.path.getsize(images_filename)
-        total_images = file_size // image_size
-        
-        if file_size % image_size != 0:
-            print(f"Warning: File size {file_size} is not perfectly divisible by image size {image_size}")
-            print(f"Expected {total_images} complete images")
-        
-        print(f"Loading {len(metadata_df)} images from {images_filename}")
-        print(f"File contains {total_images} total images, image size: {image_size} bytes")
-        
-        all_images = np.memmap(
-            images_filename,
-            dtype=np.uint8,
-            mode='r',
-            shape=(total_images, image_size)
-        )
+        print(f"Loading {len(metadata_df)} images from {images_filename} via np.load (mmap)")
+        all_images = np.load(images_filename, mmap_mode='r')
+        total_images = all_images.shape[0]
         
         if tickers is not None:
             image_indices = metadata_df['image_idx'].values
@@ -357,25 +432,32 @@ class GenerateImages:
         return self.batch_processor.load_batch_dataset(intervals, tickers=tickers)
 
 
-def run_batch(frequencies: List[int] = [5, 20, 60]):
+def run_batch(frequencies: List[int] = [5, 20, 60], 
+              ma_windows_map: Optional[Dict[int, Tuple[int, ...]]] = None):
     print("=== Running Batch Chart Generation ===")
     
-    loader = DataLoader(data_dir=os.path.join(os.path.dirname(__file__), "DATA"))
+    data_dir = ROOT / "DATA"
+    loader = DataLoader(data_dir=str(data_dir))
     print("Available datasets:", loader.available())
-    
-    open_data = loader.load("open")
-    low_data = loader.load("low") 
-    high_data = loader.load("high")
-    close_data = loader.load("close")
-    volume_data = loader.load("volume")
+
+    def load_df(name: str) -> pd.DataFrame:
+        return loader.to_pandas(loader.load(name))
+
+    open_data = load_df("open")
+    low_data = load_df("low") 
+    high_data = load_df("high")
+    close_data = load_df("close")
+    volume_data = load_df("volume")
     
     for freq in frequencies:
         print(f"\n=== Processing {freq}-day frequency ===")
         
+        freq_ma_windows = ma_windows_map.get(freq) if ma_windows_map else None
         config = ChartConfig(
             intervals=freq,
             image_height=32 if freq == 5 else 64 if freq == 20 else 96,
             include_ma=True,
+            ma_windows=freq_ma_windows,
             include_volume=True,
             img_save_dir=os.path.join(os.path.dirname(__file__), 'Images')
         )
@@ -397,5 +479,9 @@ def run_batch(frequencies: List[int] = [5, 20, 60]):
 
 
 if __name__ == "__main__":
-    # run_batch(frequencies=[5, 20, 60])
-    run_batch(frequencies=[5])
+    ma_windows_map = {
+        5: (5, 20, 60),
+        20: (5, 20, 60),
+        60: (5, 20, 60),
+    }
+    run_batch(frequencies=[20, 60], ma_windows_map=ma_windows_map)

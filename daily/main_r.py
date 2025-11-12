@@ -181,4 +181,4 @@ def batch_predict(dates: List[str]) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    result = predict('20250829')
+    result = predict('20251031')
