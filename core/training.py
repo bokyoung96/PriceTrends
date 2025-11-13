@@ -345,7 +345,6 @@ class Trainer:
             
             if epochs_no_improve >= 3:
                 logger.info("Early stopping triggered.")
-            break
 
 
 def main(windows: Optional[List[int]] = None):
@@ -375,5 +374,5 @@ if __name__ == "__main__":
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    WINDOWS_TO_TRAIN = [60]
+    WINDOWS_TO_TRAIN = [5, 20, 60]
     main(windows=WINDOWS_TO_TRAIN)
