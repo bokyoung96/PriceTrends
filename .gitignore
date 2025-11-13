@@ -11,10 +11,11 @@ results_d
 **/.DS_Store
 **/._.DS_Store
 
-# DATA & Images
+# DATA & Images & models
 DATA.xlsx
 DATA
 Images
+models
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
