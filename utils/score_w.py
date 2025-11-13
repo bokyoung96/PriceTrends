@@ -35,7 +35,7 @@ class WeightedResultLoader:
             print(f"\n--- Evaluating {model_name} on validation data ---")
 
             config = self.params.get_config(self.run_mode, input_days)
-            config['test_years'] = [self.validation_year]
+            config.with_test_years([self.validation_year])
 
             evaluator = ModelEvaluator(
                 input_days=input_days, return_days=return_days, config=config)
@@ -89,7 +89,7 @@ class WeightedResultLoader:
             print(f"\n--- Predicting for {model_name} on test data ---")
 
             config = self.params.get_config(self.run_mode, input_days)
-            config['test_years'] = self.test_years
+            config.with_test_years(self.test_years)
 
             evaluator = ModelEvaluator(
                 input_days=input_days, return_days=return_days, config=config)

@@ -3,24 +3,23 @@ import multiprocessing as mp
 import os
 import sys
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, Subset
-from tqdm import tqdm
 from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Dataset, Subset
+from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-IMAGES_ROOT = ROOT / "Images"
-MODELS_ROOT = ROOT / "models"
 
-from core.params import CNNParams
 from core.device import DeviceSelector
+from core.params import CNNConfig, CNNParams
+from utils.root import IMAGES_ROOT, MODELS_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +202,7 @@ class CNNModel(nn.Module):
         return x
 
 class Trainer:
-    def __init__(self, ws: int, pw: int, config: Dict) -> None:
+    def __init__(self, ws: int, pw: int, config: CNNConfig) -> None:
         self.ws = ws
         self.pw = pw
         self.config = config
@@ -212,7 +211,7 @@ class Trainer:
         self.device = selector.resolve()
         logger.info(selector.summary("Trainer"))
 
-        self.exp_name = f"korea_cnn_{ws}d{pw}p_{config['mode']}"
+        self.exp_name = f"korea_cnn_{ws}d{pw}p_{config.mode}"
         self.model_dir = MODELS_ROOT / self.exp_name
         os.makedirs(self.model_dir, exist_ok=True)
 
@@ -237,7 +236,7 @@ class Trainer:
             (1 - train_ratio) * 100,
         )
         
-        num_workers = self.config.get('num_workers', 0)
+        num_workers = getattr(self.config, 'num_workers', 0)
         spawn_like = os.name == "nt"
         if not spawn_like:
             try:
@@ -252,7 +251,7 @@ class Trainer:
             num_workers = 0
         pin_memory = self.device.type == 'cuda'
         dataloader_kwargs = {
-            "batch_size": self.config['batch_size'],
+            "batch_size": self.config.batch_size,
             "num_workers": num_workers,
             "pin_memory": pin_memory,
         }
@@ -265,11 +264,11 @@ class Trainer:
         return {"train": train_loader, "validate": val_loader}
 
     def train_empirical_ensem_model(self, dataloaders_dict: Dict[str, DataLoader]) -> None:
-        for model_num in range(self.config['ensem_size']):
+        for model_num in range(self.config.ensem_size):
             logger.info(
                 "\n--- Training Ensemble Member %d/%d ---",
                 model_num + 1,
-                self.config['ensem_size'],
+                self.config.ensem_size,
             )
             model_save_path = self.model_dir / f"checkpoint{model_num}.pth.tar"
             self.train_single_model(dataloaders_dict, model_save_path)
@@ -277,31 +276,31 @@ class Trainer:
     def train_single_model(self, dataloaders_dict: Dict[str, DataLoader], model_save_path: str) -> None:
         ds = dataloaders_dict['train'].dataset
         
-        paddings = [(int(fs[0] / 2), int(fs[1] / 2)) for fs in self.config['filter_sizes']]
+        paddings = [(int(fs[0] / 2), int(fs[1] / 2)) for fs in self.config.filter_sizes]
         
         original_ds = ds.dataset if hasattr(ds, 'dataset') else ds
         
         model = CNNModel(
-            layer_number=len(self.config['conv_channels']),
+            layer_number=len(self.config.conv_channels),
             input_size=(original_ds.image_height, original_ds.image_width),
-            inplanes=self.config['conv_channels'][0],
-            conv_layer_chanls=self.config['conv_channels'],
-            drop_prob=self.config['drop_prob'],
-            filter_size_list=self.config['filter_sizes'],
-            stride_list=[(1, 1)] * len(self.config['conv_channels']),
+            inplanes=self.config.conv_channels[0],
+            conv_layer_chanls=self.config.conv_channels,
+            drop_prob=self.config.drop_prob,
+            filter_size_list=self.config.filter_sizes,
+            stride_list=[(1, 1)] * len(self.config.conv_channels),
             padding_list=paddings,
-            dilation_list=[(1, 1)] * len(self.config['conv_channels']),
-            max_pooling_list=[(2, 1)] * len(self.config['conv_channels']),
+            dilation_list=[(1, 1)] * len(self.config.conv_channels),
+            max_pooling_list=[(2, 1)] * len(self.config.conv_channels),
         ).to(self.device)
         
-        optimizer = optim.Adam(model.parameters(), lr=self.config['lr'])
+        optimizer = optim.Adam(model.parameters(), lr=self.config.lr)
         criterion = nn.CrossEntropyLoss()
         
         best_val_loss = float('inf')
         best_model_state = None
         epochs_no_improve = 0
 
-        for epoch in range(self.config['max_epoch']):
+        for epoch in range(self.config.max_epoch):
             for phase in ['train', 'validate']:
                 is_train = phase == 'train'
                 model.train() if is_train else model.eval()
@@ -312,7 +311,7 @@ class Trainer:
                 loader = dataloaders_dict[phase]
                 grad_context = torch.enable_grad if is_train else torch.no_grad
                 with grad_context():
-                    for batch in tqdm(loader, desc=f"Epoch {epoch+1}/{self.config['max_epoch']} - {phase}"):
+                    for batch in tqdm(loader, desc=f"Epoch {epoch+1}/{self.config.max_epoch} - {phase}"):
                         inputs = batch['image'].to(self.device, non_blocking=True)
                         labels = batch['label'].to(self.device, non_blocking=True)
 
@@ -360,14 +359,13 @@ def main(windows: Optional[List[int]] = None):
             logger.warning("Skipping window %d: not defined in config.json", ws)
             continue
 
-        pw = params.config['window_configs'][str(ws)]['pw']
-        logger.info("\n%s TRAINING MODEL: %dd%dp %s", '=' * 25, ws, pw, '=' * 25)
+        config = params.get_config(RUN_MODE, ws)
+        logger.info("\n%s TRAINING MODEL: %dd%dp %s", '=' * 25, ws, config.pw, '=' * 25)
         logger.info("--- Running in %s MODE ---", RUN_MODE)
 
-        config = params.get_config(RUN_MODE, ws)
-        trainer = Trainer(ws=ws, pw=config['pw'], config=config)
+        trainer = Trainer(ws=ws, pw=config.pw, config=config)
         
-        dataloaders = trainer.get_dataloaders(train_years=config['train_years'])
+        dataloaders = trainer.get_dataloaders(train_years=config.train_years)
         trainer.train_empirical_ensem_model(dataloaders)
 
 
@@ -377,5 +375,5 @@ if __name__ == "__main__":
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    WINDOWS_TO_TRAIN = [5, 20, 60]
+    WINDOWS_TO_TRAIN = [60]
     main(windows=WINDOWS_TO_TRAIN)
