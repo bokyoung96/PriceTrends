@@ -1,173 +1,140 @@
-import pandas as pd
-from pathlib import Path
-from tqdm import tqdm
-from typing import Dict, List, Tuple
+import logging
+from pandas.core.frame import DataFrame
+import sys
 from functools import cached_property
-import matplotlib.pyplot as plt
-import seaborn as sns
+from pathlib import Path
+from typing import Dict, Iterable, Optional, Sequence, Tuple
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from utils.root import RESULTS_ROOT, SCORES_ROOT
+
+logger = logging.getLogger(__name__)
 
 
-class ResultLoader:
-    def __init__(self, results_dir: str = 'results/results_production'):
-        self.results_dir = Path(__file__).parent / results_dir
+class ResultRepository:
+    def __init__(self, mode: str = 'TEST') -> None:
+        self.mode = mode.lower()
+        self.base_dir = RESULTS_ROOT
 
-    def raw_results(self, i: int, r: int) -> pd.DataFrame:
-        file_path = self.results_dir / f"test_results_i{i}_r{r}.parquet"
-
+    def fetch(self, input_days: int, return_days: int) -> pd.DataFrame:
+        file_path = self.base_dir / f"price_trends_results_{self.mode}_i{input_days}_r{return_days}.parquet"
         if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
+            raise FileNotFoundError(
+                f"No result file found for I{input_days}/R{return_days} (mode={self.mode}) in {self.base_dir}"
+            )
         return pd.read_parquet(file_path)
 
-    def load_results(self, i: int, r: int) -> Dict[str, pd.DataFrame]:
-        df = self.raw_results(i, r).reset_index(drop=False)
-        df['ending_date'] = pd.to_datetime(
-            df['ending_date'].astype(str), format='%Y%m%d')
 
-        pivot_dict = {}
-        for col in ['label', 'prediction', 'prob_down', 'prob_up']:
-            pivot_df = df.pivot(index='ending_date',
-                                columns='StockID', values=col)
-            pivot_dict[col] = pivot_df
-        return pivot_dict
+class ResultAnalyzer:
+    def __init__(self, repository: ResultRepository, pairs: Sequence[Tuple[int, int]]) -> None:
+        normalized = list(self._normalize_pairs(pairs))
+        if not normalized:
+            raise ValueError("At least one (input_days, return_days) pair must be provided.")
+        self.repo = repository
+        self.pairs = normalized
 
-    def available_models(self) -> List[Tuple[int, int]]:
-        models = []
-        for file_path in self.results_dir.glob("test_results_i*_r*.parquet"):
-            name = file_path.stem
-            parts = name.replace("test_results_", "").split("_")
-            i = int(parts[0][1:])
-            r = int(parts[1][1:])
-            models.append((i, r))
-        return sorted(models)
+    @staticmethod
+    def _normalize_pairs(pairs: Sequence[Tuple[int, int]]) -> Iterable[Tuple[int, int]]:
+        def to_pair(item: Tuple[int, int]) -> Tuple[int, int]:
+            if isinstance(item, tuple):
+                if len(item) == 2:
+                    return int(item[0]), int(item[1])
+            raise ValueError(f"Invalid pair: {item}")
+
+        if isinstance(pairs, tuple) and len(pairs) == 2 and all(isinstance(x, int) for x in pairs):
+            return [to_pair(pairs)]
+
+        normalized = []
+        for item in pairs:
+            normalized.append(to_pair(item))
+        return normalized
+
+    def _pivot_results(self, df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        df = df.reset_index(drop=False)
+        df['ending_date'] = pd.to_datetime(df['ending_date'].astype(str), format='%Y%m%d')
+        columns = ['label', 'prediction', 'prob_down', 'prob_up']
+        return {col: df.pivot(index='ending_date', columns='StockID', values=col) for col in columns}
+
+    def load_pivots(self, input_days: int, return_days: int) -> Dict[str, pd.DataFrame]:
+        df = self.repo.fetch(input_days, return_days)
+        return self._pivot_results(df)
+
+    def get_prob_up(self, input_days: int, return_days: int) -> pd.DataFrame:
+        return self.load_pivots(input_days, return_days)['prob_up']
 
     @cached_property
-    def avg_prob(self) -> pd.DataFrame:
-        prob_ups = []
-        models = self.available_models()
-        for i, r in tqdm(models, desc="Loading models"):
+    def prob_up(self) -> Dict[Tuple[int, int], pd.DataFrame]:
+        data: Dict[Tuple[int, int], pd.DataFrame] = {}
+        for pair in self.pairs:
             try:
-                data = self.load_results(i, r)
-                prob_ups.append(data['prob_up'])
-            except FileNotFoundError:
-                print(f"Model I{i}/R{r} not found, skipping...")
-                continue
+                data[pair] = self.get_prob_up(*pair)
+            except FileNotFoundError as exc:
+                logger.warning("Model I%d/R%d not found: %s", pair[0], pair[1], exc)
+        if not data:
+            raise ValueError("No probability data could be loaded for the provided pairs.")
+        return data
 
+    @cached_property
+    def prob_up_avg(self) -> Optional[pd.DataFrame]:
+        prob_ups = list(self.prob_up.values())
         if len(prob_ups) < 2:
-            raise ValueError("Need at least 2 models for average")
+            return None
 
         common_dates = prob_ups[0].index
         common_ids = prob_ups[0].columns
-
         for prob_up in prob_ups[1:]:
             common_dates = common_dates.intersection(prob_up.index)
             common_ids = common_ids.intersection(prob_up.columns)
 
-        print(
-            f"Common dates: {len(common_dates)}, Common stocks: {len(common_ids)}")
+        logger.info("Common dates: %d, Common stocks: %d", len(common_dates), len(common_ids))
 
-        aligned_probs = []
-        for prob_up in prob_ups:
-            aligned = prob_up.loc[common_dates, common_ids]
-            aligned_probs.append(aligned)
+        aligned = [prob_up.loc[common_dates, common_ids] for prob_up in prob_ups]
+        return sum(aligned) / len(aligned)
 
-        avgs = sum(aligned_probs) / len(aligned_probs)
-        return avgs
+    def save(
+        self,
+        output_dir: Optional[Path] = None,
+        include_average: bool = True,
+    ) -> Dict[Tuple[int, int], pd.DataFrame]:
+        target_dir = output_dir or SCORES_ROOT
+        target_dir.mkdir(parents=True, exist_ok=True)
 
-    def __call__(self, i: int, r: int = None) -> Dict[str, pd.DataFrame]:
-        if r is None:
-            r = i
-        return self.load_results(i, r)
+        for (input_days, return_days), df in self.prob_up.items():
+            out_path = target_dir / f"price_trends_score_{self.repo.mode}_i{input_days}_r{return_days}.parquet"
+            df.to_parquet(out_path)
+            logger.info("Saved %s", out_path)
 
-    @cached_property
-    def prob_up_5d(self) -> pd.DataFrame:
-        return self(5)['prob_up']
+        if include_average:
+            avg_df = self.prob_up_avg
+            if avg_df is None:
+                logger.info("Average probability not available (need at least 2 models).")
+            else:
+                out_path = target_dir / f"price_trends_score_{self.repo.mode}_ensemble.parquet"
+                avg_df.to_parquet(out_path)
+                logger.info("Saved ensemble average %s", out_path)
 
-    @cached_property
-    def prob_up_20d(self) -> pd.DataFrame:
-        return self(20)['prob_up']
 
-    @cached_property
-    def prob_up_60d(self) -> pd.DataFrame:
-        return self(60)['prob_up']
-
-    def analyze_and_save_results(self, plot: bool = True):
-        dir_name = self.results_dir.name
-        env_suffix = dir_name.replace('results_', '')
-
-        model_is = [5, 20, 60]
-        model_props = {
-            f'Model i={i}': getattr(self, f'prob_up_{i}d') for i in model_is
-        }
-
-        output_dir = self.results_dir.parent
-
-        for i in model_is:
-            try:
-                prob_df = getattr(self, f'prob_up_{i}d')
-                output_path = output_dir / f"price_trends_avg_{env_suffix}_{i}.parquet"
-                prob_df.to_parquet(output_path)
-                print(f"Saved: {output_path}")
-            except FileNotFoundError:
-                print(f"Model i={i} not found, skipping save.")
-            except Exception as e:
-                print(f"Error saving model i={i}: {e}")
-
-        try:
-            avg_prob_df = self.avg_prob
-            output_path = output_dir / f"price_trends_avg_{env_suffix}_ensemble.parquet"
-            avg_prob_df.to_parquet(output_path)
-            print(f"Saved ensemble average: {output_path}")
-        except (ValueError, FileNotFoundError) as e:
-            print(f"Could not save ensemble average: {e}")
-
-        if not plot:
-            return
-
-        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-        axes = axes.flatten()
-
-        titles = list(model_props.keys()) + ['Ensemble Average']
-
-        for idx, (title, prob_df_property) in enumerate(model_props.items()):
-            try:
-                prob_up = prob_df_property.values.flatten()
-                prob_up = prob_up[~pd.isna(prob_up)]
-
-                axes[idx].hist(prob_up, bins=50, alpha=0.7, edgecolor='black')
-                axes[idx].set_title(title)
-                axes[idx].set_xlabel('Prob Up')
-                axes[idx].set_ylabel('Frequency')
-                axes[idx].grid(True, alpha=0.3)
-                print(f"{title} - Mean: {prob_up.mean():.4f}, Std: {prob_up.std():.4f}")
-
-            except FileNotFoundError:
-                print(f"{title} not found")
-                axes[idx].text(0.5, 0.5, f'{title}\nNot Found', ha='center', va='center', transform=axes[idx].transAxes)
-
-        try:
-            avg_prob = self.avg_prob.values.flatten()
-            avg_prob = avg_prob[~pd.isna(avg_prob)]
-
-            axes[3].hist(avg_prob, bins=50, alpha=0.7, edgecolor='black', color='red')
-            axes[3].set_title(titles[3])
-            axes[3].set_xlabel('Prob Up')
-            axes[3].set_ylabel('Frequency')
-            axes[3].grid(True, alpha=0.3)
-            print(f"{titles[3]} - Mean: {avg_prob.mean():.4f}, Std: {avg_prob.std():.4f}")
-
-        except (ValueError, FileNotFoundError):
-            print("Ensemble average not available for plotting.")
-            axes[3].text(0.5, 0.5, 'Ensemble Average\nNot Found', ha='center', va='center', transform=axes[3].transAxes)
-
-        plt.tight_layout()
-        plt.show()
+def main(
+    mode: str = 'TEST',
+    pairs: Sequence[Tuple[int, int]] = ((5, 5), (20, 20), (60, 60)),
+    include_average: bool = True,
+) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    repo = ResultRepository(mode=mode)
+    analyzer = ResultAnalyzer(repo, pairs)
+    analyzer.save(include_average=include_average)
+    return analyzer
 
 
 if __name__ == "__main__":
-    print("--- Processing Test Results ---")
-    test_loader = ResultLoader(results_dir='results/results_test')
-    test_loader.analyze_and_save_results(plot=True)
-
-    print("\n--- Processing Production Results ---")
-    prod_loader = ResultLoader(results_dir='results/results_production')
-    prod_loader.analyze_and_save_results(plot=False)
+    analyzer = main(mode='TEST',
+                    pairs=(5, 5),
+                    include_average=False)

@@ -1,9 +1,17 @@
+import json
 import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Set
+
 import pandas as pd
 import polars as pl
-import json
-from dataclasses import dataclass
-from typing import Dict, List, Set
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from utils.root import DATA_ROOT
 
 
 class DataConverter:
@@ -161,15 +169,17 @@ class DataLoader:
 
 
 if __name__ == "__main__":
+    data_root = DATA_ROOT
+
     # NOTE: DATA CONVERTER
     converter = DataConverter(
-        excel_path=os.path.join(os.path.dirname(__file__), "..", "DATA", "DATA.xlsx"),
-        output_dir=os.path.join(os.path.dirname(__file__), "..", "DATA")
+        excel_path=str(data_root / "DATA.xlsx"),
+        output_dir=str(data_root)
     )
     converter.data_convert()
 
     # NOTE: DATA LOADER
-    loader = DataLoader(data_dir=os.path.join(os.path.dirname(__file__), "..", "DATA"))
+    loader = DataLoader(data_dir=str(data_root))
     print("Available datasets:", loader.available())
     excluded = loader.get_excluded_tickers()
     if excluded:

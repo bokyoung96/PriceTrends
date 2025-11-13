@@ -1,19 +1,20 @@
 import os
 import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Tuple, Optional, List, Dict
-from dataclasses import dataclass
+from numpy.lib.format import open_memmap
 from PIL import Image, ImageDraw
 from tqdm import tqdm
-from numpy.lib.format import open_memmap
 
 ROOT = Path(__file__).resolve().parents[1]
-IMG_ROOT = ROOT / "Images"
 sys.path.insert(0, str(ROOT))
 
 from core.loader import DataLoader
+from utils.root import DATA_ROOT, IMAGES_ROOT
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class ChartConfig:
     background_color: int = 0
     chart_color: int = 255
     volume_chart_gap: int = 1
-    img_save_dir: str = str(IMG_ROOT)
+    img_save_dir: str = str(IMAGES_ROOT)
 
 
 @dataclass(frozen=True)
@@ -436,7 +437,7 @@ def run_batch(frequencies: List[int] = [5, 20, 60],
               ma_windows_map: Optional[Dict[int, Tuple[int, ...]]] = None):
     print("=== Running Batch Chart Generation ===")
     
-    data_dir = ROOT / "DATA"
+    data_dir = DATA_ROOT
     loader = DataLoader(data_dir=str(data_dir))
     print("Available datasets:", loader.available())
 
@@ -459,7 +460,7 @@ def run_batch(frequencies: List[int] = [5, 20, 60],
             include_ma=True,
             ma_windows=freq_ma_windows,
             include_volume=True,
-            img_save_dir=os.path.join(os.path.dirname(__file__), 'Images')
+            img_save_dir=str(IMAGES_ROOT)
         )
         
         generator = GenerateImages(

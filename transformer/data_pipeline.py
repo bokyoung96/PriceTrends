@@ -1,13 +1,18 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 
 from core.loader import DataLoader
+
+try:
+    from .features import build_feature_panel
+except ImportError:  # pragma: no cover - fallback when running as a script
+    from transformer.features import build_feature_panel  # type: ignore
 
 
 Array = np.ndarray
@@ -25,7 +30,7 @@ class RawTensorConfig:
     min_assets: int = 50
     min_valid_ratio: float = 0.95
     normalization: Literal["asset", "cross", "none"] = "asset"
-    features: Tuple[str, ...] = ("log_ret", "hl_spread", "oc_gap", "volume_z")
+    features: Tuple[Any, ...] = ("log_ret", "hl_spread", "oc_gap", "volume_z")
     volume_window: int = 20
     zero_as_invalid: bool = False
 
@@ -42,6 +47,7 @@ class RawTensorConfig:
         if not (0.0 < ratio <= 1.0):
             raise ValueError("min_valid_ratio must be in (0, 1].")
         object.__setattr__(self, "min_valid_ratio", ratio)
+        object.__setattr__(self, "features", tuple(self.features))
 
 
 @dataclass(frozen=True)
@@ -75,8 +81,16 @@ class RawWindowBuilder:
 
     def run(self) -> RawWindows:
         frames = self._load_frames()
-        panel, valid_mask, dates, assets = self._build_feature_panel(frames)
-        windows = self._build_windows(panel, valid_mask, frames["close"], dates, assets)
+        feature_panel = build_feature_panel(
+            frames,
+            feature_defs=self.cfg.features,
+            normalization=self.cfg.normalization,
+            volume_window=self.cfg.volume_window,
+            zero_as_invalid=self.cfg.zero_as_invalid,
+        )
+        dates = frames["close"].index.to_numpy()
+        assets = tuple(frames["close"].columns.astype(str))
+        windows = self._build_windows(feature_panel.values, feature_panel.mask, frames["close"], dates, assets)
         output_path = self._resolve_output_path()
         windows.save(output_path)
         print(f"[transformer] saved windows to {output_path}")
@@ -113,68 +127,6 @@ class RawWindowBuilder:
 
         assert base_index is not None and base_columns is not None
         return frames
-
-    def _build_feature_panel(
-        self, frames: Dict[str, pd.DataFrame]
-    ) -> Tuple[Array, Array, Array, Tuple[str, ...]]:
-        close = frames["close"]
-        high = frames["high"]
-        low = frames["low"]
-        open_ = frames["open"]
-        volume = frames["volume"]
-
-        prev_close = close.shift(1)
-        log_ret = np.log(close / prev_close)
-
-        hl_spread = (high - low) / close.replace(0.0, np.nan)
-        oc_gap = (open_ - prev_close) / prev_close
-
-        vol_mean = volume.rolling(self.cfg.volume_window, min_periods=1).mean()
-        volume_z = (volume / vol_mean.replace(0.0, np.nan)) - 1.0
-
-        feature_map = {
-            "log_ret": log_ret,
-            "hl_spread": hl_spread,
-            "oc_gap": oc_gap,
-            "volume_z": volume_z,
-        }
-
-        arrays: List[Array] = []
-        for name in self.cfg.features:
-            if name not in feature_map:
-                raise ValueError(f"Unknown feature '{name}'. Available: {list(feature_map)}")
-            arrays.append(feature_map[name].to_numpy(copy=True))
-
-        panel = np.stack(arrays, axis=-1)
-        panel = self._apply_normalization(panel)
-
-        valid_mask = np.isfinite(panel).all(axis=2)
-        if self.cfg.zero_as_invalid:
-            valid_mask &= panel.any(axis=2)
-
-        panel = np.nan_to_num(panel, nan=0.0).astype(np.float32, copy=False)
-        dates = close.index.to_numpy()
-        assets = tuple(close.columns.astype(str))
-
-        return panel, valid_mask, dates, assets
-
-    def _apply_normalization(self, panel: Array) -> Array:
-        norm = self.cfg.normalization.lower()
-        if norm == "none":
-            return panel
-
-        data = panel.copy()
-        if norm == "asset":
-            mean = np.nanmean(data, axis=0, keepdims=True)
-            std = np.nanstd(data, axis=0, keepdims=True)
-        elif norm == "cross":
-            mean = np.nanmean(data, axis=1, keepdims=True)
-            std = np.nanstd(data, axis=1, keepdims=True)
-        else:
-            raise ValueError(f"Unknown normalization '{self.cfg.normalization}'.")
-
-        std = np.where(std == 0.0, 1.0, std)
-        return (data - mean) / std
 
     def _build_windows(
         self,

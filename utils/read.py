@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -7,14 +8,15 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_IMAGE_DIR = ROOT / "prediction" / "Images"
+sys.path.insert(0, str(ROOT))
+
+from utils.root import IMAGES_ROOT
 
 
 class ChartViewer:
-    def __init__(self, intervals: int, base_dir: Optional[str] = None) -> None:
+    def __init__(self, intervals: int) -> None:
         self.intervals = intervals
-        base_path = Path(base_dir) if base_dir is not None else DEFAULT_IMAGE_DIR
-        self.base_dir = str(base_path)
+        self.base_dir = str(IMAGES_ROOT)
         self.image_height = self._get_image_height(intervals)
         self.image_width = intervals * 3
         self.image_shape = (self.image_height, self.image_width)
@@ -95,18 +97,17 @@ class ChartViewer:
             plt.show()
 
 def read_charts(
-    ticker: str, intervals: int, chart_numbers: Optional[List[int]] = None, base_dir: Optional[str] = None
+    ticker: str, intervals: int, chart_numbers: Optional[List[int]] = None
 ) -> None:
     try:
-        viewer = ChartViewer(intervals=intervals, base_dir=base_dir)
+        viewer = ChartViewer(intervals=intervals)
         viewer.load_data()
         viewer.display_charts(ticker=ticker, chart_numbers=chart_numbers)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"Error: {e}")
 
-def load_full_dataset(intervals: int, base_dir: Optional[str] = None) -> tuple[np.ndarray, pd.DataFrame]:
-    base_path = Path(base_dir) if base_dir is not None else DEFAULT_IMAGE_DIR
-    save_dir = base_path / str(intervals)
+def load_full_dataset(intervals: int) -> tuple[np.ndarray, pd.DataFrame]:
+    save_dir = IMAGES_ROOT / str(intervals)
     
     metadata_filename = save_dir / f'charts_{intervals}d_metadata.feather'
     npy_filename = save_dir / f'images_{intervals}d.npy'
@@ -147,6 +148,6 @@ def load_full_dataset(intervals: int, base_dir: Optional[str] = None) -> tuple[n
 if __name__ == "__main__":
     read_charts(ticker="A005930", 
                 intervals=60, 
-                chart_numbers=[270, 6090])
+                chart_numbers=[270, 6189])
     
     # images, metadata = load_full_dataset(intervals=5)

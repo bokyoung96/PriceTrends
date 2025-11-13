@@ -68,7 +68,7 @@ class RealTimeEvaluator(ModelEvaluator):
             return None
 
         from torch.utils.data import DataLoader
-        dataloader = DataLoader(dataset, batch_size=self.config['batch_size'], 
+        dataloader = DataLoader(dataset, batch_size=self.config.batch_size, 
                                shuffle=False, num_workers=0)
         return dataloader
 
