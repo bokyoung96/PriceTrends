@@ -8,8 +8,8 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
-class QuantileBuckets:
-    """Stores the tickers assigned to each quantile for a single rebalance date."""
+class BucketAllocation:
+    """Stores the tickers assigned to each bucket for a single rebalance date."""
 
     labels: Dict[int, Tuple[str, ...]]
     total_assets: int
@@ -23,7 +23,7 @@ class QuantileBuckets:
         return not self.skipped and self.total_assets > 0
 
 
-class QuantileAssigner:
+class BucketAllocator:
     """Splits cross-sectional scores into equally populated buckets."""
 
     def __init__(self, quantiles: int, min_assets: int, allow_partial: bool = False) -> None:
@@ -31,13 +31,13 @@ class QuantileAssigner:
         self.min_assets = min_assets
         self.allow_partial = allow_partial
 
-    def assign(self, scores: pd.Series) -> QuantileBuckets:
+    def assign(self, scores: pd.Series) -> BucketAllocation:
         clean_scores = scores.dropna()
         asset_count = len(clean_scores)
         min_required = self.quantiles if self.allow_partial else self.min_assets
 
         if asset_count < self.quantiles:
-            return QuantileBuckets(
+            return BucketAllocation(
                 labels={i: tuple() for i in range(self.quantiles)},
                 total_assets=asset_count,
                 skipped=True,
@@ -45,7 +45,7 @@ class QuantileAssigner:
             )
 
         if asset_count < min_required:
-            return QuantileBuckets(
+            return BucketAllocation(
                 labels={i: tuple() for i in range(self.quantiles)},
                 total_assets=asset_count,
                 skipped=True,
@@ -62,7 +62,7 @@ class QuantileAssigner:
             working[int(bucket)].append(ticker)
         bucket_map = {k: tuple(v) for k, v in working.items()}
 
-        return QuantileBuckets(
+        return BucketAllocation(
             labels=bucket_map,
             total_assets=asset_count,
             skipped=False,
