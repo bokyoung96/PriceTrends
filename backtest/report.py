@@ -40,6 +40,7 @@ class SimulationReport:
     config: BacktestConfig
     quantiles: Dict[int, BucketReport]
     bench_equity: Optional[pd.Series] = None
+    labels: Optional[Dict[int, str]] = None
 
     def equity_frame(self) -> pd.DataFrame:
         series = {self._quantile_label(qid): rpt.equity_curve for qid, rpt in self.quantiles.items()}
@@ -146,6 +147,8 @@ class SimulationReport:
         return fig
 
     def _quantile_label(self, quantile_id: int) -> str:
+        if self.labels and quantile_id in self.labels:
+            return self.labels[quantile_id]
         return f"q{quantile_id + 1}"
 
     def _format_summary_table(self, summary: pd.DataFrame) -> pd.DataFrame:
@@ -279,7 +282,7 @@ class SimulationReport:
             return None
         shifted = series.copy()
         shifted.index = shifted.index - pd.offsets.Day(1)
-        monthly = (1.0 + shifted).resample("M").prod() - 1.0
+        monthly = (1.0 + shifted).resample("ME").prod() - 1.0
         recent = monthly.tail(months)
         if recent.empty:
             return None
@@ -519,7 +522,7 @@ class SimulationReport:
             return None
         shifted = series.copy()
         shifted.index = shifted.index - pd.offsets.Day(1)
-        monthly = (1.0 + shifted).resample("M").prod() - 1.0
+        monthly = (1.0 + shifted).resample("ME").prod() - 1.0
         recent = monthly.tail(months)
         if recent.empty:
             return None

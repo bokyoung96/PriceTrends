@@ -136,5 +136,5 @@ def main(
 
 if __name__ == "__main__":
     analyzer = main(mode='TEST',
-                    pairs=(20, 20),
+                    pairs=(60, 60),
                     include_average=False)
