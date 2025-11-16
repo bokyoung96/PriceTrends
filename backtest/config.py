@@ -26,9 +26,10 @@ def _default_output_path() -> Path:
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    scores_path: Path = field(default_factory=_default_scores_path)
+    scores_path: Path | Sequence[Path] = field(default_factory=_default_scores_path)
     close_path: Path = field(default_factory=_default_close_path)
     output_dir: Path = field(default_factory=_default_output_path)
+    score_paths: Tuple[Path, ...] = field(init=False, repr=False)
 
     initial_capital: float = 100_000_000.0
     quantiles: int = 5
@@ -42,14 +43,16 @@ class BacktestConfig:
     buy_cost_bps: float = 0.0
     sell_cost_bps: float = 0.0
     tax_bps: float = 0.0
-    entry_lag: int = 1
+    entry_lag: int = 0
     min_price_relative: float = 0.05
     max_price_relative: float = 20.0
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "scores_path", Path(self.scores_path))
-        object.__setattr__(self, "close_path", Path(self.close_path))
-        object.__setattr__(self, "output_dir", Path(self.output_dir))
+        normalized = self._normalize_scores(self.scores_path)
+        object.__setattr__(self, "score_paths", normalized)
+        object.__setattr__(self, "scores_path", normalized[0])
+        object.__setattr__(self, "close_path", self._resolve_path(self.close_path))
+        object.__setattr__(self, "output_dir", self._resolve_path(self.output_dir))
         self._validate_numeric_fields()
 
     def _validate_numeric_fields(self) -> None:
@@ -82,13 +85,31 @@ class BacktestConfig:
         return unique_sorted
 
     def with_overrides(self, **updates: Any) -> "BacktestConfig":
-        current = {f.name: getattr(self, f.name) for f in fields(self)}
+        current = {f.name: getattr(self, f.name) for f in fields(self) if f.init}
         current.update(updates)
         return BacktestConfig(**current)
 
     def ensure_io_paths(self, *, scores_in_memory: bool = False, prices_in_memory: bool = False) -> None:
-        if not scores_in_memory and not self.scores_path.exists():
-            raise FileNotFoundError(f"Scores parquet not found: {self.scores_path}")
+        if not scores_in_memory:
+            for path in self.score_paths:
+                if not Path(path).exists():
+                    raise FileNotFoundError(f"Scores parquet not found: {path}")
         if not prices_in_memory and not self.close_path.exists():
             raise FileNotFoundError(f"Close price parquet not found: {self.close_path}")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_path(self, path: Path | str) -> Path:
+        candidate = Path(path)
+        if candidate.is_absolute():
+            return candidate
+        return PROJECT_ROOT / candidate
+
+    def _normalize_scores(self, raw: Path | Sequence[Path]) -> Tuple[Path, ...]:
+        if isinstance(raw, (str, Path)):
+            return (self._resolve_path(raw),)
+        return tuple(self._resolve_path(p) for p in raw)
+
+    def resolve_score_paths(self, explicit: Sequence[Path | str] | None = None) -> list[Path]:
+        if explicit:
+            return [self._resolve_path(p) for p in explicit]
+        return list(self.score_paths)

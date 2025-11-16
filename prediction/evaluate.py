@@ -285,4 +285,4 @@ def main(
 
 if __name__ == "__main__":
     res = main(mode='TEST',
-               pairs=[(20, 20)])
+               pairs=[(60, 60)])

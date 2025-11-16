@@ -21,7 +21,7 @@ PriceTrends가 산출한 점수(신호) 테이블을 읽어, 원하는 방식으
 
 ## 2. 기본 동작 요약
 
-- **점수 경로**: `scores/price_trends_score_test_i20_r20.parquet`
+- **점수 경로**: `scores/price_trends_score_test_i20_r20.parquet`. 여러 파일을 한 번에 비교하려면 `BacktestConfig(scores_path=(Path("...i20_r20.parquet"), Path("...i60_r60.parquet")))`처럼 전달하고 `run_batch()`를 호출한다.
 - **가격 경로**: `DATA/close.parquet`
 - **버킷 수**: 5개(0~4). `active_quantiles`를 지정하면 일부만 운용 가능.
 - **초기 자본**: 버킷당 100,000,000 KRW
@@ -53,6 +53,29 @@ print(report.summary_table())
 report.save()  # bt/backtest_M_i20_r20.png
 ```
 
+여러 점수 파일을 한 번에 비교하려면:
+
+```python
+from pathlib import Path
+from backtest.config import BacktestConfig
+from backtest.runner import Backtester
+
+cfg = BacktestConfig(scores_path=(
+    Path("scores/price_trends_score_test_i20_r20.parquet"),
+    Path("scores/price_trends_score_test_i60_r60.parquet"),
+))
+runner = Backtester(cfg)
+comparison = runner.run_batch(bucket=("q1", "q5"))  # 여러 버킷을 한 번에 비교 가능
+comparison.save()  # bt/backtest_M_i20_r20_i60_r60_q1_q5.png 생성 (벤치마크 포함)
+
+# 각 점수 파일별 리포트를 조회하거나 원천 DataFrame을 보고 싶다면:
+per_bucket = runner.batch_reports()
+score_frames = runner.score_df  # {"i20_r20": DataFrame, "i60_r60": DataFrame, ...}
+i20_scores = score_frames["i20_r20"]
+```
+
+버킷 선택 인자에는 `"q5"`, `5`, `("q1", "q5")`, `[0, 4]` 등 원하는 형태로 넘길 수 있으며, 지정된 모든 버킷이 비교 리포트에 추가된다. 파일명/제목은 `점수조합_버킷조합` 형태로 저장되고, 배치 리포트에도 단일 실행과 동일하게 벤치마크 곡선이 포함된다.
+
 `Backtester`는 내부에서 `BacktestDatasetBuilder → BucketAllocator → BacktestEngine`을 자동으로 호출한다. 실행이 끝나면 `SimulationReport`가 반환되며, `summary_table()`, `equity_frame()`, `return_frame()` 같은 메서드를 그대로 사용할 수 있다.
 
 ### VS Code Interactive Window에서 활용하기
@@ -63,8 +86,8 @@ from backtest.runner import Backtester
 bt = Backtester()
 report = bt.run()
 
-scores = bt.score_df         # 점수 DataFrame (dates × tickers)
-prices = bt.price_df         # 가격 DataFrame
+scores = bt.score_df         # 단일 실행은 DataFrame, 멀티 실행은 dict[str, DataFrame]
+prices = bt.price_df         # 점수와 동일한 규칙으로 동작
 hit_rate = bt.hit_rate_df    # 버킷별 승률
 daily = bt.daily_return_df   # 리밸런스 사이 구간을 일별로 보간한 수익률
 ```
