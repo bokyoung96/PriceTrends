@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
+from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT  # noqa: E402
 
 
 def _default_scores_path() -> Path:
@@ -41,6 +42,9 @@ class BacktestConfig:
     buy_cost_bps: float = 0.0
     sell_cost_bps: float = 0.0
     tax_bps: float = 0.0
+    entry_lag: int = 1
+    min_price_relative: float = 0.05
+    max_price_relative: float = 20.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "scores_path", Path(self.scores_path))
@@ -59,6 +63,14 @@ class BacktestConfig:
             value = getattr(self, field_name)
             if value < 0:
                 raise ValueError(f"{field_name} must be non-negative.")
+        if self.entry_lag < 0:
+            raise ValueError("entry_lag must be non-negative.")
+        if not (0 < self.min_price_relative < 1):
+            raise ValueError("min_price_relative must be in the interval (0, 1).")
+        if self.max_price_relative <= 1:
+            raise ValueError("max_price_relative must be greater than 1.")
+        if self.min_price_relative >= self.max_price_relative:
+            raise ValueError("min_price_relative must be less than max_price_relative.")
 
     def quantile_ids(self) -> Tuple[int, ...]:
         if not self.active_quantiles:
@@ -74,9 +86,9 @@ class BacktestConfig:
         current.update(updates)
         return BacktestConfig(**current)
 
-    def ensure_io_paths(self) -> None:
-        if not self.scores_path.exists():
+    def ensure_io_paths(self, *, scores_in_memory: bool = False, prices_in_memory: bool = False) -> None:
+        if not scores_in_memory and not self.scores_path.exists():
             raise FileNotFoundError(f"Scores parquet not found: {self.scores_path}")
-        if not self.close_path.exists():
+        if not prices_in_memory and not self.close_path.exists():
             raise FileNotFoundError(f"Close price parquet not found: {self.close_path}")
         self.output_dir.mkdir(parents=True, exist_ok=True)

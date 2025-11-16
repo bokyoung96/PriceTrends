@@ -1,6 +1,6 @@
 import logging
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.device import DeviceSelector
 from core.params import CNNConfig, CNNParams
-from core.training import KoreanEquityDataset, CNNModel
+from core.training import CNNModel, KoreanEquityDataset
 from utils.root import MODELS_ROOT, RESULTS_ROOT
 
 logger = logging.getLogger(__name__)
@@ -285,4 +285,4 @@ def main(
 
 if __name__ == "__main__":
     res = main(mode='TEST',
-               pairs=[(5, 5)])
+               pairs=[(20, 20)])

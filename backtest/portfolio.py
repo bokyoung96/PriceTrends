@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import pandas as pd
 
-from .costs import ExecutionCostModel
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backtest.costs import ExecutionCostModel
 
 @dataclass(frozen=True)
 class TradeRecord:
-    quantile_id: int
+    bucket_id: int
     enter_date: pd.Timestamp
     exit_date: pd.Timestamp
     tickers: Tuple[str, ...]
@@ -19,22 +25,27 @@ class TradeRecord:
     note: str | None = None
 
 
-class QuantilePortfolio:
-    """Tracks capital allocated to a single quantile bucket through time."""
+class BucketPortfolio:
+    """Tracks capital allocated to a single bucket through time."""
 
     def __init__(
         self,
-        quantile_id: int,
+        bucket_id: int,
         starting_capital: float,
         cost_model: ExecutionCostModel | None = None,
+        *,
+        min_price_relative: float = 0.05,
+        max_price_relative: float = 20.0,
     ) -> None:
-        self.quantile_id = quantile_id
+        self.bucket_id = bucket_id
         self.capital = starting_capital
         self._equity: Dict[pd.Timestamp, float] = {}
         self._period_returns: Dict[pd.Timestamp, float] = {}
         self.trades: List[TradeRecord] = []
         self._initialized = False
         self.cost_model = cost_model or ExecutionCostModel.disabled()
+        self.min_price_relative = float(min_price_relative)
+        self.max_price_relative = float(max_price_relative)
 
     def mark_initial(self, as_of: pd.Timestamp) -> None:
         if not self._initialized:
@@ -128,13 +139,20 @@ class QuantilePortfolio:
         entries = entries[valid_entries]
         exits = exit_prices.reindex(entries.index)
         missing_exit = exits.isna() | (exits <= 0)
-        halted = tuple(exits.index[missing_exit])
+        halted = list(exits.index[missing_exit])
 
         if missing_exit.any():
             exits = exits.copy()
             exits[missing_exit] = entries[missing_exit]
 
-        return entries, exits, halted
+        relatives = exits / entries
+        unstable = (relatives > self.max_price_relative) | (relatives < self.min_price_relative)
+        if unstable.any():
+            halted.extend(relatives.index[unstable])
+            entries = entries[~unstable]
+            exits = exits[~unstable]
+
+        return entries, exits, tuple(halted)
 
     def _halted_message(self, halted: Tuple[str, ...]) -> str | None:
         if not halted:
@@ -162,7 +180,7 @@ class QuantilePortfolio:
         self._period_returns[exit_date] = period_return
         self.trades.append(
             TradeRecord(
-                quantile_id=self.quantile_id,
+                bucket_id=self.bucket_id,
                 enter_date=enter_date,
                 exit_date=exit_date,
                 tickers=tickers,

@@ -1,11 +1,11 @@
 import logging
-from pandas.core.frame import DataFrame
 import sys
 from functools import cached_property
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 import pandas as pd
+from pandas.core.frame import DataFrame
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -136,5 +136,5 @@ def main(
 
 if __name__ == "__main__":
     analyzer = main(mode='TEST',
-                    pairs=(5, 5),
+                    pairs=(20, 20),
                     include_average=False)

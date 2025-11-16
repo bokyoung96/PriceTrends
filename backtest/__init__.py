@@ -1,11 +1,11 @@
 from .config import BacktestConfig
 from .engine import BacktestEngine
 from .report import BacktestReport
-from .runner import run_backtest
+from .runner import Backtester
 
 __all__ = [
+    "Backtester",
     "BacktestConfig",
     "BacktestEngine",
     "BacktestReport",
-    "run_backtest",
 ]
