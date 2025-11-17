@@ -26,6 +26,7 @@ def run_single_example() -> None:
 def run_batch_example() -> None:
     config = BacktestConfig(
         scores_path=(
+            Path("scores/price_trends_score_test_i5_r5.parquet"),
             Path("scores/price_trends_score_test_i20_r20.parquet"),
             Path("scores/price_trends_score_test_i60_r60.parquet"),
         )
