@@ -1,6 +1,5 @@
 # PriceTrends 백테스트 가이드
 
-PriceTrends가 산출한 점수(신호) 테이블을 읽어, 원하는 방식으로 버킷(퀀타일) 포트폴리오를 구성하고 리밸런스하는 모듈이다. `scores/*.parquet`와 `DATA/close.parquet`만 준비되어 있다면 데이터 로딩, 버킷 배분, 거래 비용 반영, 리포트 생성까지 한 번에 수행한다.
 
 ---
 
@@ -13,7 +12,6 @@ PriceTrends가 산출한 점수(신호) 테이블을 읽어, 원하는 방식으
 | `BucketAllocator` | 점수 단면을 정렬해 버킷별 티커 리스트를 생성 |
 | `BacktestEngine` | 리밸런스 스케줄을 만들고, 각 버킷 포트폴리오(`BucketPortfolio`)를 업데이트 |
 | `Backtester` | 위 과정을 묶어 API 하나(`run`)로 제공하는 퍼사드 |
-| `SimulationReport` | 각 버킷의 자산곡선, 수익률, 요약 통계를 보관하며 PNG 리포트도 생성 |
 
 엔진은 매 리밸런스 시점마다 `entry_lag`일 후의 가격으로 진입하고, 다음 리밸런스 지점에서 청산한다. 거래 비용이 켜져 있다면 진입 시 매수 비용을 먼저 차감하고, 청산 시 매도+세금 비용을 빼서 다음 라운드 자본을 결정한다. 데이터가 부족하거나 가격이 비정상적으로 튀면 해당 종목을 자동 제외하고 이유를 `TradeRecord.note`에 남긴다.
 
@@ -21,14 +19,16 @@ PriceTrends가 산출한 점수(신호) 테이블을 읽어, 원하는 방식으
 
 ## 2. 기본 동작 요약
 
-- **점수 경로**: `scores/price_trends_score_test_i20_r20.parquet`. 여러 파일을 한 번에 비교하려면 `BacktestConfig(scores_path=(Path("...i20_r20.parquet"), Path("...i60_r60.parquet")))`처럼 전달하고 `run_batch()`를 호출한다.
+- **점수 경로**: `scores/price_trends_score_test_i20_r20.parquet`. 여러 파일을 한 번에 비교하려면 `BacktestConfig(scores_path=(Path("...i20_r20.parquet"), Path("...i60_r60.parquet")))`처럼 **튜플**을 전달한다. 첫 번째 파일은 `config.scores_path[0]`로 접근한다.
 - **가격 경로**: `DATA/close.parquet`
 - **버킷 수**: 5개(0~4). `active_quantiles`를 지정하면 일부만 운용 가능.
 - **초기 자본**: 버킷당 100,000,000 KRW
 - **리밸런스 주기**: 월말(`"M"`). 주말이더라도 실제 존재하는 마지막 영업일만 사용.
 - **최소 종목 수**: 30개. 부족 시 버킷을 건너뛰고 사유를 기록.
+- **유니버스 필터**: `constituent_universe=MarketUniverse.KOSPI200`(또는 `MarketUniverse.KOSDAQ150`, `MarketUniverse.KOSPI`, ...)로 지정하면 `core/const.py`가 만든 `CONST_*.parquet`을 불러와 해당 지수 구성 종목만 리밸런싱에 사용한다. `None`이면 가격 테이블 전체를 쓰며, 커스텀 경로를 직접 넘기고 싶으면 `constituent_path=Path("DATA/CONST_CUSTOM.parquet")`처럼 지정한다.
 - **거래 비용**: 기본 비활성. `apply_trading_costs=True`와 `buy_cost_bps`, `sell_cost_bps`, `tax_bps`로 설정.
-- **리포트 저장**: `bt/backtest_{주기}_{iXX_rXX}.png`. 점수 파일 이름에서 `i20_r20` 같은 토큰을 추출해 제목과 파일명에 포함.
+- **Report output**: bt/backtest_{freq}_{iXX_rXX}.png. Tokens such as i20_r20 from the score filename are appended to the PNG name.
+- **Progress display**: show_progress=True shows a tqdm bar; False runs quietly.
 
 모든 파라미터는 `BacktestConfig` 생성 시 혹은 `Backtester().run(...)`에 키워드 인자로 전달해 덮어쓸 수 있다.
 
@@ -50,13 +50,13 @@ report = runner.run(
 )
 
 print(report.summary_table())
-report.save()  # bt/backtest_M_i20_r20.png
 ```
 
 여러 점수 파일을 한 번에 비교하려면:
 
 ```python
 from pathlib import Path
+from core.const import MarketUniverse
 from backtest.config import BacktestConfig
 from backtest.runner import Backtester
 
@@ -66,15 +66,12 @@ cfg = BacktestConfig(scores_path=(
 ))
 runner = Backtester(cfg)
 comparison = runner.run_batch(bucket=("q1", "q5"))  # 여러 버킷을 한 번에 비교 가능
-comparison.save()  # bt/backtest_M_i20_r20_i60_r60_q1_q5.png 생성 (벤치마크 포함)
 
-# 각 점수 파일별 리포트를 조회하거나 원천 DataFrame을 보고 싶다면:
 per_bucket = runner.batch_reports()
 score_frames = runner.score_df  # {"i20_r20": DataFrame, "i60_r60": DataFrame, ...}
 i20_scores = score_frames["i20_r20"]
 ```
 
-버킷 선택 인자에는 `"q5"`, `5`, `("q1", "q5")`, `[0, 4]` 등 원하는 형태로 넘길 수 있으며, 지정된 모든 버킷이 비교 리포트에 추가된다. 파일명/제목은 `점수조합_버킷조합` 형태로 저장되고, 배치 리포트에도 단일 실행과 동일하게 벤치마크 곡선이 포함된다.
 
 `Backtester`는 내부에서 `BacktestDatasetBuilder → BucketAllocator → BacktestEngine`을 자동으로 호출한다. 실행이 끝나면 `SimulationReport`가 반환되며, `summary_table()`, `equity_frame()`, `return_frame()` 같은 메서드를 그대로 사용할 수 있다.
 
@@ -87,9 +84,11 @@ bt = Backtester()
 report = bt.run()
 
 scores = bt.score_df         # 단일 실행은 DataFrame, 멀티 실행은 dict[str, DataFrame]
-prices = bt.price_df         # 점수와 동일한 규칙으로 동작
+prices = bt.price_df         # 점수와 동일한 규칙으로 정제된 종가
 hit_rate = bt.hit_rate_df    # 버킷별 승률
-daily = bt.daily_return_df   # 리밸런스 사이 구간을 일별로 보간한 수익률
+daily = bt.daily_return_df   # 리밸런스 주기와 무관하게 일별 수익률
+daily_pnl = bt.daily_pnl_df  # 일별 PnL (KRW)
+equity = bt.equity_df        # 버킷별 일별 자본 곡선
 ```
 
 ---
@@ -106,14 +105,18 @@ config = BacktestConfig(
     initial_capital=50_000_000,
     rebalance_frequency="MS",
     entry_lag=0,  # 룩어헤드가 필요하면 0으로 지정
+    constituent_universe=MarketUniverse.KOSPI200,  # 인덱스 구성 종목만 대상
 )
 
-dataset = BacktestDatasetBuilder(config.scores_path, config.close_path).build()
+dataset = BacktestDatasetBuilder(
+    config.scores_path[0],
+    config.close_path,
+    constituent_source=config.constituent_path,
+).build()
 assigner = BucketAllocator(config.quantiles, config.min_assets, config.allow_partial_buckets)
 
 report = BacktestEngine(config, dataset, assigner).run()
 print(report.summary_table())
-report.save("bt/backtest_MS_custom.png")
 ```
 
 이처럼 각 단계를 직접 호출하면 데이터 전처리나 버킷 로직을 원하는 대로 수정할 수 있다.

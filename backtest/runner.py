@@ -19,6 +19,7 @@ from backtest.quantiles import BucketAllocator
 from backtest.report import BacktestReport, BucketReport, SimulationReport
 
 BucketSelector = str | int | Sequence[str | int] | None
+LABEL_TOKEN_PREFIXES = ("test", "origin", "i", "r")
 
 
 class Backtester:
@@ -40,10 +41,12 @@ class Backtester:
         **overrides: Any,
     ) -> BacktestReport:
         overrides = dict(overrides)
-        explicit = score_paths or overrides.pop("score_paths", None)
+        explicit = score_paths or overrides.pop("scores_path", None)
+        if explicit is not None:
+            overrides["scores_path"] = explicit
 
         base_config = self._config_with(overrides)
-        candidates = base_config.resolve_score_paths(explicit)
+        candidates = list(base_config.scores_path)
         if not candidates:
             raise ValueError("No score files available for the backtest.")
 
@@ -74,7 +77,7 @@ class Backtester:
     ) -> BacktestReport:
         overrides = dict(overrides)
         if scores_path is not None:
-            overrides["scores_path"] = Path(scores_path)
+            overrides["scores_path"] = (Path(scores_path),)
         config = self._config_with(overrides)
         executor = SingleBacktest(config, scores=scores, prices=prices)
         report = executor.run()
@@ -91,8 +94,10 @@ class Backtester:
         **overrides: Any,
     ) -> BacktestReport:
         overrides = dict(overrides)
+        if score_paths is not None:
+            overrides["scores_path"] = score_paths
         config = self._config_with(overrides)
-        candidates = config.resolve_score_paths(score_paths)
+        candidates = list(config.scores_path)
         if len(candidates) < 2:
             raise ValueError("At least two score files are required for run_batch().")
         return self.run(score_paths=candidates, bucket=bucket, **overrides)
@@ -137,12 +142,11 @@ class Backtester:
 
     @property
     def daily_return_df(self) -> pd.DataFrame:
-        if self._dataset is None:
-            raise RuntimeError("daily_return_df is only available after a single-score run.")
-        dataset = self._dataset
-        equity = self.equity_df
-        expanded = equity.reindex(dataset.dates).ffill()
-        return expanded.pct_change().dropna()
+        return self.latest_report().daily_return_frame()
+
+    @property
+    def daily_pnl_df(self) -> pd.DataFrame:
+        return self.latest_report().daily_pnl_frame()
 
     def _config_with(self, overrides: dict[str, Any]) -> BacktestConfig:
         if overrides:
@@ -202,8 +206,9 @@ class SingleBacktest:
             prices_in_memory=self._prices is not None,
         )
         builder = BacktestDatasetBuilder(
-            scores_source=self._scores if self._scores is not None else self.config.scores_path,
+            scores_source=self._scores if self._scores is not None else self.config.scores_path[0],
             close_source=self._prices if self._prices is not None else self.config.close_path,
+            constituent_source=self.config.constituent_path,
         )
         return builder.build()
 
@@ -235,10 +240,14 @@ class BatchBacktest:
     def run(self, bucket: BucketSelector = None) -> BatchResult:
         runs: dict[str, SingleBacktest] = {}
         for path in self._score_paths:
-            cfg = self._base_config.with_overrides(scores_path=path)
+            cfg = self._base_config.with_overrides(scores_path=(path,))
             single = SingleBacktest(cfg)
             single.run()
-            tokens = [tok for tok in path.stem.split("_") if tok.lower().startswith(("i", "r"))]
+            tokens = [
+                tok
+                for tok in path.stem.split("_")
+                if tok.lower().startswith(LABEL_TOKEN_PREFIXES)
+            ]
             label = "_".join(tokens) if tokens else path.stem
             runs[label] = single
         combined = self.combine_reports(runs, bucket)

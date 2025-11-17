@@ -11,8 +11,6 @@ FrameSource = Union[pd.DataFrame, str, Path]
 
 @dataclass(frozen=True)
 class BacktestDataset:
-    """Holds the aligned signal, tradable price, and benchmark matrices."""
-
     scores: pd.DataFrame
     prices: pd.DataFrame
     bench: Optional[pd.Series] = None
@@ -42,16 +40,26 @@ class BacktestDataset:
 
 
 class BacktestDatasetBuilder:
-    """Loads parquet files and applies minimal cleansing/alignment rules."""
-
-    def __init__(self, scores_source: FrameSource, close_source: FrameSource) -> None:
+    def __init__(
+        self,
+        scores_source: FrameSource,
+        close_source: FrameSource,
+        *,
+        constituent_source: FrameSource | None = None,
+    ) -> None:
         self.scores_source = scores_source
         self.close_source = close_source
+        self.constituent_source = constituent_source
 
     def build(self) -> BacktestDataset:
         scores = self._prepare_table(self._resolve_source(self.scores_source, "scores"), table_name="scores")
         prices = self._prepare_table(self._resolve_source(self.close_source, "close"), table_name="close")
+        constituents = (
+            self._load_constituent_frame(self.constituent_source) if self.constituent_source is not None else None
+        )
         aligned_scores, aligned_prices, bench = self._align(scores, prices)
+        if constituents is not None:
+            aligned_scores, aligned_prices = self._apply_constituent_mask(aligned_scores, aligned_prices, constituents)
         return BacktestDataset(scores=aligned_scores, prices=aligned_prices, bench=bench)
 
     def _resolve_source(self, source: FrameSource, table_name: str) -> pd.DataFrame:
@@ -102,3 +110,26 @@ class BacktestDatasetBuilder:
         prices = prices.loc[valid_index]
         bench = bench.reindex(valid_index) if bench is not None else None
         return scores, prices, bench
+
+    def _load_constituent_frame(self, source: FrameSource) -> pd.DataFrame:
+        frame = self._resolve_source(source, "constituent")
+        frame = self._prepare_table(frame, table_name="constituent")
+        numeric = frame.apply(pd.to_numeric, errors="coerce")
+        numeric = numeric.fillna(0.0)
+        return numeric
+
+    def _apply_constituent_mask(
+        self,
+        scores: pd.DataFrame,
+        prices: pd.DataFrame,
+        mask: pd.DataFrame,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        working_mask = mask.reindex(scores.index).ffill().fillna(0.0)
+        working_mask = working_mask.reindex(columns=scores.columns).fillna(0.0)
+        limited_scores = scores.where(working_mask > 0)
+        valid_cols = working_mask.any(axis=0)
+        if not valid_cols.any():
+            raise ValueError("Constituent filter removed all tickers from the universe.")
+        limited_scores = limited_scores.loc[:, valid_cols]
+        limited_prices = prices.loc[:, valid_cols]
+        return limited_scores, limited_prices
