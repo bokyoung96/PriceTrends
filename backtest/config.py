@@ -3,13 +3,14 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT  # noqa: E402
+from core.const import MarketUniverse
+from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
 
 
 def _default_scores_path() -> Path:
@@ -27,9 +28,10 @@ def _default_output_path() -> Path:
 @dataclass(frozen=True)
 class BacktestConfig:
     scores_path: Path | Sequence[Path] = field(default_factory=_default_scores_path)
-    close_path: Path = field(default_factory=_default_close_path)
-    output_dir: Path = field(default_factory=_default_output_path)
-    score_paths: Tuple[Path, ...] = field(init=False, repr=False)
+    close_path: Path | str = field(default_factory=_default_close_path)
+    output_dir: Path | str = field(default_factory=_default_output_path)
+    constituent_universe: MarketUniverse | None = MarketUniverse.KOSPI200
+    constituent_path: Path | str | None = None
 
     initial_capital: float = 100_000_000.0
     quantiles: int = 5
@@ -44,16 +46,38 @@ class BacktestConfig:
     sell_cost_bps: float = 0.0
     tax_bps: float = 0.0
     entry_lag: int = 0
-    min_price_relative: float = 0.05
-    max_price_relative: float = 20.0
+    show_progress: bool = True
 
     def __post_init__(self) -> None:
-        normalized = self._normalize_scores(self.scores_path)
-        object.__setattr__(self, "score_paths", normalized)
-        object.__setattr__(self, "scores_path", normalized[0])
-        object.__setattr__(self, "close_path", self._resolve_path(self.close_path))
-        object.__setattr__(self, "output_dir", self._resolve_path(self.output_dir))
+        def to_project_path(raw: Path | str) -> Path:
+            candidate = Path(raw)
+            return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+        raw_scores = self.scores_path
+        if isinstance(raw_scores, (str, Path)):
+            score_paths = (to_project_path(raw_scores),)
+        else:
+            score_paths = tuple(to_project_path(p) for p in raw_scores)
+        if not score_paths:
+            raise ValueError("At least one score file must be provided.")
+        object.__setattr__(self, "scores_path", score_paths)
+        object.__setattr__(self, "close_path", to_project_path(self.close_path))
+        object.__setattr__(self, "output_dir", to_project_path(self.output_dir))
+        object.__setattr__(self, "constituent_path", self._resolve_constituent_path(to_project_path))
         self._validate_numeric_fields()
+
+    @property
+    def score_paths(self) -> Tuple[Path, ...]:
+        """Backwards-compatible alias for scores_path."""
+        return tuple(self.scores_path)
+
+    def _resolve_constituent_path(self, converter: Callable[[Path | str], Path]) -> Path | None:
+        if self.constituent_path is not None:
+            return converter(self.constituent_path)
+        if self.constituent_universe is None:
+            return None
+        universe_path = DATA_ROOT / self.constituent_universe.parquet_filename
+        return converter(universe_path)
 
     def _validate_numeric_fields(self) -> None:
         if self.initial_capital <= 0:
@@ -68,12 +92,6 @@ class BacktestConfig:
                 raise ValueError(f"{field_name} must be non-negative.")
         if self.entry_lag < 0:
             raise ValueError("entry_lag must be non-negative.")
-        if not (0 < self.min_price_relative < 1):
-            raise ValueError("min_price_relative must be in the interval (0, 1).")
-        if self.max_price_relative <= 1:
-            raise ValueError("max_price_relative must be greater than 1.")
-        if self.min_price_relative >= self.max_price_relative:
-            raise ValueError("min_price_relative must be less than max_price_relative.")
 
     def quantile_ids(self) -> Tuple[int, ...]:
         if not self.active_quantiles:
@@ -85,8 +103,11 @@ class BacktestConfig:
         return unique_sorted
 
     def with_overrides(self, **updates: Any) -> "BacktestConfig":
+        normalized = dict(updates)
+        if "score_paths" in normalized and "scores_path" not in normalized:
+            normalized["scores_path"] = normalized.pop("score_paths")
         current = {f.name: getattr(self, f.name) for f in fields(self) if f.init}
-        current.update(updates)
+        current.update(normalized)
         return BacktestConfig(**current)
 
     def ensure_io_paths(self, *, scores_in_memory: bool = False, prices_in_memory: bool = False) -> None:
@@ -96,20 +117,6 @@ class BacktestConfig:
                     raise FileNotFoundError(f"Scores parquet not found: {path}")
         if not prices_in_memory and not self.close_path.exists():
             raise FileNotFoundError(f"Close price parquet not found: {self.close_path}")
+        if self.constituent_path is not None and not self.constituent_path.exists():
+            raise FileNotFoundError(f"Constituent parquet not found: {self.constituent_path}")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def _resolve_path(self, path: Path | str) -> Path:
-        candidate = Path(path)
-        if candidate.is_absolute():
-            return candidate
-        return PROJECT_ROOT / candidate
-
-    def _normalize_scores(self, raw: Path | Sequence[Path]) -> Tuple[Path, ...]:
-        if isinstance(raw, (str, Path)):
-            return (self._resolve_path(raw),)
-        return tuple(self._resolve_path(p) for p in raw)
-
-    def resolve_score_paths(self, explicit: Sequence[Path | str] | None = None) -> list[Path]:
-        if explicit:
-            return [self._resolve_path(p) for p in explicit]
-        return list(self.score_paths)

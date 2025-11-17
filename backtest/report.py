@@ -50,6 +50,17 @@ class SimulationReport:
         series = {self._quantile_label(qid): rpt.period_returns for qid, rpt in self.quantiles.items()}
         return pd.DataFrame(series).sort_index()
 
+    def daily_return_frame(self) -> pd.DataFrame:
+        equity = self.equity_frame()
+        return equity.pct_change().dropna(how="all")
+
+    def daily_pnl_frame(self) -> pd.DataFrame:
+        equity = self.equity_frame()
+        return equity.diff().fillna(0.0)
+
+    def daily_equity_frame(self) -> pd.DataFrame:
+        return self.equity_frame()
+
     def summary_table(self) -> pd.DataFrame:
         table = pd.DataFrame(
             {
@@ -383,7 +394,7 @@ class SimulationReport:
         if self.config.active_quantiles:
             active = [f"q{idx + 1}" for idx in self.config.active_quantiles]
             quantile_label = f"{len(active)} buckets ({', '.join(active)})"
-        stem = self.config.scores_path.stem
+        stem = self.config.scores_path[0].stem
         tokens = [tok for tok in stem.split("_") if tok.lower().startswith("i") or tok.lower().startswith("r")]
         stem_hint = "_".join(tokens) if tokens else stem
         title = f"PriceTrends Backtest – {freq} – {quantile_label} ({stem_hint})"
@@ -468,7 +479,7 @@ class SimulationReport:
         end = float(equity.iloc[-1])
         total_return = 0.0 if start == 0 else (end / start) - 1.0
 
-        periods_per_year = self._periods_per_year()
+        periods_per_year = self._periods_per_year(equity.index if isinstance(equity, pd.Series) else None)
         years = len(returns) / periods_per_year if periods_per_year > 0 else 0.0
         cagr = (end / start) ** (1 / years) - 1.0 if years > 0 and start > 0 else 0.0
 
@@ -492,7 +503,21 @@ class SimulationReport:
             "win_rate": float(win_rate),
         }
 
-    def _periods_per_year(self) -> float:
+    def _periods_per_year(self, index: pd.Index | None = None) -> float:
+        default = self._default_periods_per_year()
+        if index is None or len(index) < 2 or not isinstance(index, pd.DatetimeIndex):
+            return default
+        diffs = pd.Series(index).diff().dropna()
+        if diffs.empty:
+            return default
+        avg_days = diffs.dt.total_seconds().mean() / 86_400
+        if avg_days <= 0:
+            return default
+        if avg_days <= 3:
+            return 252.0
+        return max(default, 365.25 / avg_days)
+
+    def _default_periods_per_year(self) -> float:
         freq = self.config.rebalance_frequency.upper()
         mapping = {
             "D": 252,
@@ -590,11 +615,14 @@ class SimulationReport:
         axis.set_zorder(1)
 
     def _auto_filename(self) -> str:
-        stem = self.config.scores_path.stem
+        stem = self.config.scores_path[0].stem
         tokens = [token for token in stem.split("_") if token.lower().startswith("i") or token.lower().startswith("r")]
         suffix = "_".join(tokens) if tokens else stem
         freq = self.config.rebalance_frequency.upper()
-        return f"backtest_{freq}_{suffix}.png"
+        universe = "ALL"
+        if self.config.constituent_universe is not None:
+            universe = self.config.constituent_universe.name
+        return f"backtest_{freq}_{universe}_{suffix}.png"
 
 
 # Backwards compatibility aliases
