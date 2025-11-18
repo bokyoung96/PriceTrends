@@ -14,6 +14,7 @@ class BacktestDataset:
     scores: pd.DataFrame
     prices: pd.DataFrame
     bench: Optional[pd.Series] = None
+    weights: Optional[pd.DataFrame] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.scores.index, pd.DatetimeIndex):
@@ -29,6 +30,13 @@ class BacktestDataset:
                 raise TypeError("bench index must be a DatetimeIndex.")
             if not self.bench.index.equals(self.scores.index):
                 raise ValueError("bench series must align with the score index.")
+        if self.weights is not None:
+            if not isinstance(self.weights.index, pd.DatetimeIndex):
+                raise TypeError("weights index must be a DatetimeIndex.")
+            if not self.weights.index.equals(self.scores.index):
+                raise ValueError("weights must align with the score index.")
+            if not self.weights.columns.equals(self.scores.columns):
+                raise ValueError("weights must expose the same ticker columns as scores/prices.")
 
     @property
     def dates(self) -> pd.DatetimeIndex:
@@ -79,18 +87,22 @@ class BacktestDataLoader:
         *,
         constituent_source: FrameSource | None = None,
         benchmark_symbol: str | None = "IKS200",
+        weight_source: FrameSource | None = None,
     ) -> None:
         self.scores_source = scores_source
         self.close_source = close_source
         self.constituent_source = constituent_source
         self.benchmark_symbol = benchmark_symbol
+        self.weight_source = weight_source
         self._score_loader = FrameLoader("scores")
         self._price_loader = FrameLoader("close")
         self._constituent_loader = FrameLoader("constituent")
+        self._weight_loader = FrameLoader("weights") if weight_source is not None else None
 
     def build(self) -> BacktestDataset:
         scores = self._score_loader.load(self.scores_source)
         prices = self._price_loader.load(self.close_source)
+        weights = self._weight_loader.load(self.weight_source) if self._weight_loader is not None else None
         bench = None
         if self.benchmark_symbol and self.benchmark_symbol in prices.columns:
             bench = prices[self.benchmark_symbol]
@@ -100,10 +112,13 @@ class BacktestDataLoader:
             bench,
             bench_symbol=self.benchmark_symbol,
         )
+        aligned_weights = self._align_weights(weights, aligned_scores.index, aligned_scores.columns)
         if self.constituent_source is not None:
             mask = self._constituent_loader.load(self.constituent_source)
-            aligned_scores, aligned_prices = self._apply_constituent_mask(aligned_scores, aligned_prices, mask)
-        return BacktestDataset(scores=aligned_scores, prices=aligned_prices, bench=bench_series)
+            aligned_scores, aligned_prices, aligned_weights = self._apply_constituent_mask(
+                aligned_scores, aligned_prices, mask, aligned_weights
+            )
+        return BacktestDataset(scores=aligned_scores, prices=aligned_prices, bench=bench_series, weights=aligned_weights)
 
     def _align(
         self,
@@ -135,18 +150,36 @@ class BacktestDataLoader:
         bench_series = bench.reindex(valid_index).ffill().dropna() if bench is not None else None
         return scores, prices, bench_series
 
+    def _align_weights(
+        self,
+        weights: Optional[pd.DataFrame],
+        target_index: pd.Index,
+        target_columns: pd.Index,
+    ) -> Optional[pd.DataFrame]:
+        if weights is None:
+            return None
+        aligned = weights.reindex(target_index).ffill()
+        aligned = aligned.reindex(columns=target_columns)
+        aligned = aligned.loc[target_index]
+        return aligned
+
     def _apply_constituent_mask(
         self,
         scores: pd.DataFrame,
         prices: pd.DataFrame,
         mask: pd.DataFrame,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        working_mask = mask.reindex(scores.index).ffill().fillna(0.0)
-        working_mask = working_mask.reindex(columns=scores.columns).fillna(0.0)
-        limited_scores = scores.where(working_mask > 0)
-        valid_cols = working_mask.any(axis=0)
+        weights: Optional[pd.DataFrame] = None,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+        mask_frame = mask.reindex(scores.index).ffill().fillna(0.0)
+        mask_frame = mask_frame.reindex(columns=scores.columns).fillna(0.0)
+        masked_scores = scores.where(mask_frame > 0)
+        valid_cols = mask_frame.any(axis=0)
         if not valid_cols.any():
             raise ValueError("Constituent filter removed all tickers from the universe.")
-        limited_scores = limited_scores.loc[:, valid_cols]
-        limited_prices = prices.loc[:, valid_cols]
-        return limited_scores, limited_prices
+        masked_scores = masked_scores.loc[:, valid_cols]
+        masked_prices = prices.loc[:, valid_cols]
+        masked_weights = None
+        if weights is not None:
+            masked_weights = weights.where(mask_frame > 0)
+            masked_weights = masked_weights.loc[:, valid_cols]
+        return masked_scores, masked_prices, masked_weights
