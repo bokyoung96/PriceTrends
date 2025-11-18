@@ -8,48 +8,45 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
-class BucketAllocation:
-    """Stores the tickers assigned to each bucket for a single rebalance date."""
+class QuantileAllocation:
+    """Tickers assigned to each quantile bucket for one rebalance date."""
 
-    labels: Dict[int, Tuple[str, ...]]
+    groups: Dict[int, Tuple[str, ...]]
     total_assets: int
     skipped: bool = False
     reason: str | None = None
 
     def tickers_for(self, bucket: int) -> Tuple[str, ...]:
-        return self.labels.get(bucket, tuple())
+        return self.groups.get(bucket, tuple())
 
     def has_assets(self) -> bool:
         return not self.skipped and self.total_assets > 0
 
 
-class BucketAllocator:
-    """Splits cross-sectional scores into equally populated buckets."""
+class QuantileAllocator:
+    """Splits cross-sectional scores into equally populated groups."""
 
     def __init__(self, quantiles: int, min_assets: int, allow_partial: bool = False) -> None:
+        if quantiles < 2:
+            raise ValueError("At least two quantiles are required.")
         self.quantiles = quantiles
         self.min_assets = min_assets
         self.allow_partial = allow_partial
 
-    def assign(self, scores: pd.Series) -> BucketAllocation:
+    def assign(self, scores: pd.Series) -> QuantileAllocation:
         clean_scores = scores.dropna()
         asset_count = len(clean_scores)
-        min_required = self.quantiles if self.allow_partial else self.min_assets
+        if asset_count == 0:
+            return self._empty_allocation(reason="No assets had valid scores.")
 
         if asset_count < self.quantiles:
-            return BucketAllocation(
-                labels={i: tuple() for i in range(self.quantiles)},
-                total_assets=asset_count,
-                skipped=True,
-                reason="Not enough assets to form quantiles.",
-            )
+            return self._empty_allocation(reason="Not enough assets to form quantiles.")
 
+        min_required = self.quantiles if self.allow_partial else self.min_assets
         if asset_count < min_required:
-            return BucketAllocation(
-                labels={i: tuple() for i in range(self.quantiles)},
-                total_assets=asset_count,
-                skipped=True,
+            return self._empty_allocation(
                 reason=f"Asset count {asset_count} fell below minimum {min_required}.",
+                total=asset_count,
             )
 
         ranks = clean_scores.rank(method="first")
@@ -59,12 +56,14 @@ class BucketAllocator:
 
         working: Dict[int, list[str]] = {i: [] for i in range(self.quantiles)}
         for ticker, bucket in zip(clean_scores.index, bucket_ids):
-            working[int(bucket)].append(ticker)
-        bucket_map = {k: tuple(v) for k, v in working.items()}
+            working[int(bucket)].append(str(ticker))
+        groups = {bucket: tuple(tickers) for bucket, tickers in working.items()}
+        return QuantileAllocation(groups=groups, total_assets=asset_count)
 
-        return BucketAllocation(
-            labels=bucket_map,
-            total_assets=asset_count,
-            skipped=False,
-            reason=None,
+    def _empty_allocation(self, reason: str, total: int = 0) -> QuantileAllocation:
+        return QuantileAllocation(
+            groups={i: tuple() for i in range(self.quantiles)},
+            total_assets=total,
+            skipped=True,
+            reason=reason,
         )

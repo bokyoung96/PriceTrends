@@ -23,10 +23,10 @@ from backtest.portfolio import TradeRecord
 
 
 @dataclass(frozen=True)
-class BucketReport:
-    """Holds time-series, trade records, and summary stats for one bucket."""
+class PortfolioReport:
+    """Holds time-series, trade records, and summary stats for one portfolio group."""
 
-    bucket_id: int
+    group_id: str
     equity_curve: pd.Series
     period_returns: pd.Series
     trades: List[TradeRecord]
@@ -34,20 +34,20 @@ class BucketReport:
 
 
 @dataclass
-class SimulationReport:
-    """Aggregates bucket-level reports and exposes convenience helpers."""
+class BacktestReport:
+    """Aggregates portfolio-level reports and exposes convenience helpers."""
 
     config: BacktestConfig
-    quantiles: Dict[int, BucketReport]
+    groups: Dict[str, PortfolioReport]
     bench_equity: Optional[pd.Series] = None
-    labels: Optional[Dict[int, str]] = None
+    labels: Optional[Dict[str, str]] = None
 
     def equity_frame(self) -> pd.DataFrame:
-        series = {self._quantile_label(qid): rpt.equity_curve for qid, rpt in self.quantiles.items()}
+        series = {self._group_label(gid): rpt.equity_curve for gid, rpt in self.groups.items()}
         return pd.DataFrame(series).sort_index()
 
     def return_frame(self) -> pd.DataFrame:
-        series = {self._quantile_label(qid): rpt.period_returns for qid, rpt in self.quantiles.items()}
+        series = {self._group_label(gid): rpt.period_returns for gid, rpt in self.groups.items()}
         return pd.DataFrame(series).sort_index()
 
     def daily_return_frame(self) -> pd.DataFrame:
@@ -63,15 +63,12 @@ class SimulationReport:
 
     def summary_table(self) -> pd.DataFrame:
         table = pd.DataFrame(
-            {
-                self._quantile_label(qid): rpt.stats
-                for qid, rpt in self.quantiles.items()
-            }
+            {self._group_label(gid): rpt.stats for gid, rpt in self.groups.items()}
         ).T
         bench_stats = self._benchmark_summary()
         if bench_stats is not None:
             table.loc["benchmark"] = bench_stats
-        table.index.name = "quantile"
+        table.index.name = "portfolio"
         return table
 
     def render_summary(self) -> str:
@@ -93,7 +90,6 @@ class SimulationReport:
         returns_frame = self.return_frame()
         summary = self.summary_table()
         bench = self._benchmark_series(equity.index)
-        bench_returns = self._benchmark_period_returns()
 
         plt.rcParams.update(
             {
@@ -144,23 +140,27 @@ class SimulationReport:
 
         self._plot_drawdown(ax_drawdown, equity, color_map, bench)
 
-        quantile_labels = [idx for idx in summary.index if idx != "benchmark"]
-        best_return_label = max(quantile_labels, key=lambda label: summary.loc[label, "pnl"])
+        group_labels = [idx for idx in summary.index if idx != "benchmark"]
+        if group_labels:
+            best_return_label = max(group_labels, key=lambda label: summary.loc[label, "pnl"])
+        else:
+            best_return_label = equity.columns[-1] if not equity.empty else "n/a"
         best_color = color_map.get(best_return_label, "#4F5DFF")
         best_returns = returns_frame.get(best_return_label)
+        best_equity = equity.get(best_return_label)
         self._plot_return_hist(ax_hist, best_returns, best_return_label, best_color)
-        self._plot_monthly_heatmap(ax_heatmap, best_returns, best_return_label)
-        self._plot_excess_heatmap(ax_excess, best_returns, bench_returns, best_return_label)
+        self._plot_monthly_heatmap(ax_heatmap, best_equity, best_return_label)
+        self._plot_excess_heatmap(ax_excess, best_equity, bench, best_return_label)
 
         self._render_summary_table(ax_table, summary)
 
         fig.subplots_adjust(top=0.92)
         return fig
 
-    def _quantile_label(self, quantile_id: int) -> str:
-        if self.labels and quantile_id in self.labels:
-            return self.labels[quantile_id]
-        return f"q{quantile_id + 1}"
+    def _group_label(self, group_id: str) -> str:
+        if self.labels and group_id in self.labels:
+            return self.labels[group_id]
+        return group_id
 
     def _format_summary_table(self, summary: pd.DataFrame) -> pd.DataFrame:
         formatted = summary.copy()
@@ -174,7 +174,10 @@ class SimulationReport:
         if column in currency_fields:
             return f"{value:,.0f}"
         if column in percent_fields:
-            return f"{value * 100:0.2f}%"
+            suffix = ""
+            if column == "avg_period_return":
+                suffix = f" ({self.config.rebalance_frequency.upper()})"
+            return f"{value * 100:0.2f}%{suffix}"
         return f"{value:0.4f}"
 
     def _style_axis(self, axis: Axes, *, rounded: bool = True) -> None:
@@ -243,8 +246,8 @@ class SimulationReport:
         axis.axvline(0, color="#8E8E93", linestyle=":", linewidth=1)
         # No legend/text for the average line to keep the panel minimal.
 
-    def _plot_monthly_heatmap(self, axis: Axes, series: Optional[pd.Series], label: str) -> None:
-        matrix = self._monthly_return_matrix(series)
+    def _plot_monthly_heatmap(self, axis: Axes, equity: Optional[pd.Series], label: str) -> None:
+        matrix = self._monthly_return_matrix(equity)
         if matrix is None:
             axis.text(0.5, 0.5, "No data", ha="center", va="center")
             axis.set_xticks([])
@@ -260,17 +263,17 @@ class SimulationReport:
     def _plot_excess_heatmap(
         self,
         axis: Axes,
-        quant_returns: Optional[pd.Series],
-        bench_returns: Optional[pd.Series],
+        quant_equity: Optional[pd.Series],
+        bench_equity: Optional[pd.Series],
         label: str,
     ) -> None:
-        if quant_returns is None or bench_returns is None:
+        if quant_equity is None or bench_equity is None:
             axis.text(0.5, 0.5, "No benchmark data", ha="center", va="center")
             axis.set_xticks([])
             axis.set_yticks([])
             return
-        quant_matrix = self._monthly_return_matrix(quant_returns)
-        bench_matrix = self._monthly_return_matrix(bench_returns)
+        quant_matrix = self._monthly_return_matrix(quant_equity)
+        bench_matrix = self._monthly_return_matrix(bench_equity)
         if quant_matrix is None or bench_matrix is None:
             axis.text(0.5, 0.5, "No benchmark data", ha="center", va="center")
             axis.set_xticks([])
@@ -284,26 +287,6 @@ class SimulationReport:
             title=f"Excess vs Benchmark – {label}",
             cmap=plt.cm.PuOr,
         )
-
-    def _monthly_return_matrix(self, series: Optional[pd.Series], months: int = 12) -> Optional[pd.DataFrame]:
-        if series is None:
-            return None
-        series = series.dropna()
-        if series.empty:
-            return None
-        shifted = series.copy()
-        shifted.index = shifted.index - pd.offsets.Day(1)
-        monthly = (1.0 + shifted).resample("ME").prod() - 1.0
-        recent = monthly.tail(months)
-        if recent.empty:
-            return None
-        df = pd.DataFrame({"value": recent.values}, index=recent.index)
-        df["year"] = df.index.year
-        df["month"] = df.index.month
-        pivot = df.pivot(index="year", columns="month", values="value").sort_index()
-        month_order = sorted(pivot.columns)
-        pivot = pivot.reindex(columns=month_order)
-        return pivot
 
     def _render_heatmap(self, axis: Axes, matrix: pd.DataFrame, title: str, cmap) -> None:
         self._add_panel_background(axis)
@@ -390,14 +373,14 @@ class SimulationReport:
 
     def _render_title_block(self, fig: Figure, start: pd.Timestamp, end: pd.Timestamp) -> None:
         freq = self.config.rebalance_frequency.upper()
-        quantile_label = f"{self.config.quantiles} buckets"
+        group_label = f"{len(self.groups)} portfolios"
         if self.config.active_quantiles:
             active = [f"q{idx + 1}" for idx in self.config.active_quantiles]
-            quantile_label = f"{len(active)} buckets ({', '.join(active)})"
+            group_label = f"{len(active)} buckets ({', '.join(active)})"
         stem = self.config.scores_path[0].stem
         tokens = [tok for tok in stem.split("_") if tok.lower().startswith("i") or tok.lower().startswith("r")]
         stem_hint = "_".join(tokens) if tokens else stem
-        title = f"PriceTrends Backtest – {freq} – {quantile_label} ({stem_hint})"
+        title = f"PriceTrends Backtest – {freq} – {group_label} ({stem_hint})"
         fig.text(0.05, 0.97, title, fontsize=17, fontweight="bold")
         fig.text(0.05, 0.93, f"{start:%Y-%m-%d} to {end:%Y-%m-%d}", fontsize=11, color="#6C6C70")
 
@@ -539,16 +522,15 @@ class SimulationReport:
         drawdown = equity / running_max - 1.0
         return float(drawdown.min())
 
-    def _monthly_return_matrix(self, series: Optional[pd.Series], months: int = 12) -> Optional[pd.DataFrame]:
-        if series is None:
+    def _monthly_return_matrix(self, equity: Optional[pd.Series], months: int = 12) -> Optional[pd.DataFrame]:
+        if equity is None:
             return None
-        series = series.dropna()
+        series = equity.dropna()
         if series.empty:
             return None
-        shifted = series.copy()
-        shifted.index = shifted.index - pd.offsets.Day(1)
-        monthly = (1.0 + shifted).resample("ME").prod() - 1.0
-        recent = monthly.tail(months)
+        monthly_nav = series.resample("ME").last().dropna()
+        monthly_returns = monthly_nav.pct_change().dropna()
+        recent = monthly_returns.tail(months)
         if recent.empty:
             return None
         df = pd.DataFrame({"value": recent.values}, index=recent.index)
@@ -616,7 +598,11 @@ class SimulationReport:
 
     def _auto_filename(self) -> str:
         stem = self.config.scores_path[0].stem
-        tokens = [token for token in stem.split("_") if token.lower().startswith("i") or token.lower().startswith("r")]
+        tokens = [
+            token
+            for token in stem.split("_")
+            if token.lower().startswith(("test", "origin", "i", "r"))
+        ]
         suffix = "_".join(tokens) if tokens else stem
         freq = self.config.rebalance_frequency.upper()
         universe = "ALL"
@@ -624,7 +610,3 @@ class SimulationReport:
             universe = self.config.constituent_universe.name
         return f"backtest_{freq}_{universe}_{suffix}.png"
 
-
-# Backwards compatibility aliases
-QuantileReport = BucketReport
-BacktestReport = SimulationReport
