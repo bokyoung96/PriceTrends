@@ -39,41 +39,23 @@ class BacktestDataset:
         return self.scores.columns
 
 
-class BacktestDatasetBuilder:
-    def __init__(
-        self,
-        scores_source: FrameSource,
-        close_source: FrameSource,
-        *,
-        constituent_source: FrameSource | None = None,
-    ) -> None:
-        self.scores_source = scores_source
-        self.close_source = close_source
-        self.constituent_source = constituent_source
+class FrameLoader:
+    def __init__(self, table_name: str) -> None:
+        self.table_name = table_name
 
-    def build(self) -> BacktestDataset:
-        scores = self._prepare_table(self._resolve_source(self.scores_source, "scores"), table_name="scores")
-        prices = self._prepare_table(self._resolve_source(self.close_source, "close"), table_name="close")
-        constituents = (
-            self._load_constituent_frame(self.constituent_source) if self.constituent_source is not None else None
-        )
-        aligned_scores, aligned_prices, bench = self._align(scores, prices)
-        if constituents is not None:
-            aligned_scores, aligned_prices = self._apply_constituent_mask(aligned_scores, aligned_prices, constituents)
-        return BacktestDataset(scores=aligned_scores, prices=aligned_prices, bench=bench)
-
-    def _resolve_source(self, source: FrameSource, table_name: str) -> pd.DataFrame:
+    def load(self, source: FrameSource) -> pd.DataFrame:
         if isinstance(source, pd.DataFrame):
             if source.empty:
-                raise ValueError(f"{table_name} dataframe is empty.")
-            return source.copy()
+                raise ValueError(f"{self.table_name} dataframe is empty.")
+            frame = source.copy()
+        else:
+            path = Path(source)
+            if not path.exists():
+                raise FileNotFoundError(f"Expected parquet missing: {path}")
+            frame = pd.read_parquet(path)
+        return self._prepare(frame)
 
-        path = Path(source)
-        if not path.exists():
-            raise FileNotFoundError(f"Expected parquet missing: {path}")
-        return pd.read_parquet(path)
-
-    def _prepare_table(self, df: pd.DataFrame, table_name: str) -> pd.DataFrame:
+    def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         if "Date" in df.columns and not isinstance(df.index, pd.DatetimeIndex):
             df.set_index("Date", inplace=True)
@@ -81,22 +63,64 @@ class BacktestDatasetBuilder:
             try:
                 df.index = pd.to_datetime(df.index)
             except Exception as exc:  # noqa: BLE001
-                raise ValueError(f"Failed to coerce {table_name} index to datetime.") from exc
+                raise ValueError(f"Failed to coerce {self.table_name} index to datetime.") from exc
         df.sort_index(inplace=True)
         df = df[~df.index.duplicated(keep="first")]
         df.columns = df.columns.map(str)
         df = df.dropna(how="all")
         return df
 
-    def _align(self, scores: pd.DataFrame, prices: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.Series]]:
+
+class BacktestDataLoader:
+    def __init__(
+        self,
+        scores_source: FrameSource,
+        close_source: FrameSource,
+        *,
+        constituent_source: FrameSource | None = None,
+        benchmark_symbol: str | None = "IKS200",
+    ) -> None:
+        self.scores_source = scores_source
+        self.close_source = close_source
+        self.constituent_source = constituent_source
+        self.benchmark_symbol = benchmark_symbol
+        self._score_loader = FrameLoader("scores")
+        self._price_loader = FrameLoader("close")
+        self._constituent_loader = FrameLoader("constituent")
+
+    def build(self) -> BacktestDataset:
+        scores = self._score_loader.load(self.scores_source)
+        prices = self._price_loader.load(self.close_source)
+        bench = None
+        if self.benchmark_symbol and self.benchmark_symbol in prices.columns:
+            bench = prices[self.benchmark_symbol]
+        aligned_scores, aligned_prices, bench_series = self._align(
+            scores,
+            prices,
+            bench,
+            bench_symbol=self.benchmark_symbol,
+        )
+        if self.constituent_source is not None:
+            mask = self._constituent_loader.load(self.constituent_source)
+            aligned_scores, aligned_prices = self._apply_constituent_mask(aligned_scores, aligned_prices, mask)
+        return BacktestDataset(scores=aligned_scores, prices=aligned_prices, bench=bench_series)
+
+    def _align(
+        self,
+        scores: pd.DataFrame,
+        prices: pd.DataFrame,
+        bench: Optional[pd.Series],
+        *,
+        bench_symbol: str | None = None,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.Series]]:
         common_cols = [c for c in scores.columns if c in prices.columns]
         if not common_cols:
             raise ValueError("No overlapping tickers between scores and prices.")
 
-        bench = prices.get("IKS200") if "IKS200" in prices.columns else None
-        aligned_cols = [c for c in common_cols if c != "IKS200"]
+        aligned_cols = [c for c in common_cols if not bench_symbol or c != bench_symbol]
         if not aligned_cols:
-            raise ValueError("All overlapping columns were reserved for benchmark.")
+            raise ValueError("All overlapping tickers were reserved for the benchmark column.")
+
         scores = scores[aligned_cols]
         prices = prices[aligned_cols]
 
@@ -108,15 +132,8 @@ class BacktestDatasetBuilder:
 
         scores = scores.loc[valid_index]
         prices = prices.loc[valid_index]
-        bench = bench.reindex(valid_index) if bench is not None else None
-        return scores, prices, bench
-
-    def _load_constituent_frame(self, source: FrameSource) -> pd.DataFrame:
-        frame = self._resolve_source(source, "constituent")
-        frame = self._prepare_table(frame, table_name="constituent")
-        numeric = frame.apply(pd.to_numeric, errors="coerce")
-        numeric = numeric.fillna(0.0)
-        return numeric
+        bench_series = bench.reindex(valid_index).ffill().dropna() if bench is not None else None
+        return scores, prices, bench_series
 
     def _apply_constituent_mask(
         self,
