@@ -383,6 +383,7 @@ class BacktestReport:
         title = f"PriceTrends Backtest – {freq} – {group_label} ({stem_hint})"
         fig.text(0.05, 0.97, title, fontsize=17, fontweight="bold")
         fig.text(0.05, 0.93, f"{start:%Y-%m-%d} to {end:%Y-%m-%d}", fontsize=11, color="#6C6C70")
+        fig.text(0.05, 0.90, f"Weighting: {self._weighting_label()}", fontsize=11, color="#6C6C70")
 
     def _draw_stat_cards(self, fig: Figure, summary: pd.DataFrame) -> None:
         best_pnl_label = summary["pnl"].idxmax()
@@ -608,5 +609,25 @@ class BacktestReport:
         universe = "ALL"
         if self.config.constituent_universe is not None:
             universe = self.config.constituent_universe.name
-        return f"backtest_{freq}_{universe}_{suffix}.png"
+        weight_part = self._weight_code()
+        return f"backtest_{freq}_{universe}_{suffix}_{weight_part}.png"
+
+    def _weight_code(self) -> str:
+        mode = getattr(self.config, "portfolio_weighting", None)
+        if mode is None:
+            return "eq"
+        if hasattr(mode, "value"):
+            return str(mode.value).lower()
+        return str(mode).lower()
+
+    def _weighting_label(self) -> str:
+        mode = getattr(self.config, "portfolio_weighting", None)
+        value = getattr(mode, "value", str(mode)) if mode is not None else "eq"
+        mapping = {
+            "eq": "Equal Weight",
+            "mc": "Market Cap Weight",
+        }
+        key = str(value).lower()
+        label = mapping.get(key, str(mode) if mode is not None else "Equal Weight")
+        return f"{label} ({key})"
 

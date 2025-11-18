@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field, fields
+from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence, Tuple
 
@@ -28,6 +29,30 @@ def _default_output_path() -> Path:
     return PROJECT_ROOT / "bt"
 
 
+def _default_weight_data_path() -> Path:
+    return DATA_ROOT / "METRIC_MKTCAP.parquet"
+
+
+class PortfolioWeighting(str, Enum):
+    EQUAL = "eq"
+    MARKET_CAP = "mc"
+
+    @property
+    def requires_market_caps(self) -> bool:
+        return self is PortfolioWeighting.MARKET_CAP
+
+    @classmethod
+    def parse(cls, raw: "PortfolioWeighting | str") -> "PortfolioWeighting":
+        if isinstance(raw, PortfolioWeighting):
+            return raw
+        normalized = str(raw).strip().lower()
+        if normalized in {"eq", "equal", "ew"}:
+            return cls.EQUAL
+        if normalized in {"mc", "market_cap", "marketcap"}:
+            return cls.MARKET_CAP
+        raise ValueError(f"Unknown portfolio weighting mode: {raw}")
+
+
 @dataclass(frozen=True)
 class BacktestConfig:
     scores_path: Path | Sequence[Path] = field(default_factory=_default_scores_path)
@@ -45,6 +70,9 @@ class BacktestConfig:
     allow_partial_buckets: bool = False
     portfolio_grouping: PortfolioGroupingStrategy | None = None
 
+    portfolio_weighting: PortfolioWeighting | str = PortfolioWeighting.EQUAL
+    weight_data_path: Path | str | None = field(default_factory=_default_weight_data_path)
+
     apply_trading_costs: bool = False
     buy_cost_bps: float = 0.0
     sell_cost_bps: float = 0.0
@@ -58,6 +86,12 @@ class BacktestConfig:
         object.__setattr__(self, "close_path", self._to_project_path(self.close_path))
         object.__setattr__(self, "output_dir", self._to_project_path(self.output_dir))
         object.__setattr__(self, "constituent_path", self._select_constituent_path())
+        weighting = PortfolioWeighting.parse(self.portfolio_weighting)
+        object.__setattr__(self, "portfolio_weighting", weighting)
+        weight_path = self._prepare_weight_data_path(self.weight_data_path)
+        object.__setattr__(self, "weight_data_path", weight_path)
+        if weighting.requires_market_caps and weight_path is None:
+            raise ValueError("Market-cap weighting requires 'weight_data_path' to be set.")
         self._validate_numeric_fields()
 
     def _to_project_path(self, raw: Path | str) -> Path:
@@ -80,6 +114,11 @@ class BacktestConfig:
             return None
         universe_path = DATA_ROOT / self.constituent_universe.parquet_filename
         return self._to_project_path(universe_path)
+
+    def _prepare_weight_data_path(self, raw: Path | str | None) -> Path | None:
+        if raw is None:
+            return None
+        return self._to_project_path(raw)
 
     def grouping_strategy(self) -> PortfolioGroupingStrategy:
         if self.portfolio_grouping is not None:
@@ -105,6 +144,11 @@ class BacktestConfig:
             raise FileNotFoundError(f"Close price parquet not found: {self.close_path}")
         if self.constituent_path is not None and not Path(self.constituent_path).exists():
             raise FileNotFoundError(f"Constituent parquet not found: {self.constituent_path}")
+        if self.portfolio_weighting.requires_market_caps:
+            if self.weight_data_path is None or not Path(self.weight_data_path).exists():
+                raise FileNotFoundError(
+                    f"Market cap metric parquet not found: {self.weight_data_path or '<unspecified>'}"
+                )
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
     def cost_model(self) -> ExecutionCostModel:
@@ -126,6 +170,7 @@ class BacktestConfig:
             close_source=prices if prices is not None else self.close_path,
             constituent_source=self.constituent_path,
             benchmark_symbol=self.benchmark_symbol,
+            weight_source=self.weight_data_path if self.portfolio_weighting.requires_market_caps else None,
         )
 
     def _validate_numeric_fields(self) -> None:

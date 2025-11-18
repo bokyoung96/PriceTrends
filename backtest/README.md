@@ -75,6 +75,7 @@ VS Code Interactive Window에서 import 문제가 없도록 모든 모듈은 루
 - **벤치마크 심볼**: `benchmark_symbol`에 벤치마크 열 이름을 지정하면, 해당 열을 `BacktestDataset.bench`로 사용합니다(예: `"IKS200"`). `None`이면 벤치마크를 비활성화합니다.
 - **리밸런스 주기**: pandas 오프셋 문자열 (`"M"`, `"MS"`, `"Q"`, …)을 그대로 사용합니다.
 - **거래 비용**: `apply_trading_costs=True`일 때 `buy_cost_bps`, `sell_cost_bps`, `tax_bps`가 적용되며, 진입/청산 시 각각 차감됩니다.
+- **포트폴리오 가중치**: `portfolio_weighting`을 `"eq"`(동일 가중) 또는 `"mc"`(시총 가중)로 설정합니다. 시총 가중을 사용하면 `weight_data_path`(기본 `DATA/METRIC_MKTCAP.parquet`)에 있는 시가총액 데이터를 참조해 리밸런스마다 비중을 계산합니다.
 - **유니버스 필터**: `constituent_universe`로 사전 정의된 지수 구성(예: `MarketUniverse.KOSPI200`)을 적용하거나, `constituent_path`로 커스텀 마스크를 줄 수 있습니다.
 - **출력 경로**: `output_dir` 아래에 `backtest_{freq}_{universe}_{suffix}.png` 형식으로 저장됩니다.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Sequence
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.config import BacktestConfig
+from backtest.config import BacktestConfig, PortfolioWeighting
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataset
 from backtest.grouping import PortfolioGroupingStrategy
@@ -32,6 +33,10 @@ class WindowPayload:
     window: RebalanceWindow
     scores: pd.Series
     prices: pd.DataFrame
+    weights: pd.Series | None = None
+
+
+logger = logging.getLogger(__name__)
 
 
 class RebalancePlanner:
@@ -185,8 +190,6 @@ class PerformanceCalculator:
 
 
 class BacktestEngine:
-    """Coordinates data, portfolio grouping, and capital evolution."""
-
     def __init__(
         self,
         config: BacktestConfig,
@@ -198,7 +201,9 @@ class BacktestEngine:
         self.dataset = dataset
         self.grouping = grouping or config.grouping_strategy()
         self.cost_model = cost_model or config.cost_model()
+        self.weighting = config.portfolio_weighting
         self._calculator = PerformanceCalculator(config.rebalance_frequency)
+        self._validate_weight_support()
 
     def run(self) -> BacktestReport:
         timeline = self._build_timeline()
@@ -220,12 +225,14 @@ class BacktestEngine:
             note = allocation.message if allocation.skipped else None
             for group_id, portfolio in portfolios.items():
                 tickers = allocation.tickers_for(group_id)
+                weights = self._portfolio_weights(group_id, payload.window.signal_date, tickers, payload.weights)
                 portfolio.rebalance(
                     enter_date=payload.window.entry_date,
                     exit_date=payload.window.exit_date,
                     tickers=tickers,
                     price_slice=payload.prices,
                     note=note,
+                    weights=weights,
                 )
 
         reports = {gid: self._build_group_report(portfolio) for gid, portfolio in portfolios.items()}
@@ -277,7 +284,50 @@ class BacktestEngine:
                 f"Price slice empty for window {window.entry_date} -> {window.exit_date}. "
                 "Ensure price data covers the full rebalance interval."
             )
-        return WindowPayload(window=window, scores=scores_row, prices=price_slice)
+        weights_row = None
+        if getattr(self.dataset, "weights", None) is not None:
+            try:
+                weights_row = self.dataset.weights.loc[window.signal_date]
+            except KeyError:
+                weights_row = None
+        return WindowPayload(window=window, scores=scores_row, prices=price_slice, weights=weights_row)
+
+    def _portfolio_weights(
+        self,
+        group_id: str,
+        signal_date: pd.Timestamp,
+        tickers: Sequence[str],
+        weight_row: pd.Series | None,
+    ) -> pd.Series | None:
+        if not tickers:
+            return None
+        if self.weighting is not PortfolioWeighting.MARKET_CAP:
+            return None
+        if weight_row is None:
+            self._log_weight_fallback(group_id, signal_date, "missing weight row for signal date")
+            return None
+        working = pd.Series(weight_row, dtype=float).reindex(tickers)
+        if working.isna().any():
+            self._log_weight_fallback(group_id, signal_date, "incomplete market-cap data for selected tickers")
+            return None
+        working = working.clip(lower=0.0)
+        total = working.sum()
+        if total <= 0:
+            self._log_weight_fallback(group_id, signal_date, "non-positive market-cap sum after clipping")
+            return None
+        return working / total
+
+    def _log_weight_fallback(self, group_id: str, signal_date: pd.Timestamp, reason: str) -> None:
+        logger.warning(
+            "Falling back to equal weights for %s on %s: %s",
+            group_id,
+            pd.Timestamp(signal_date).date(),
+            reason,
+        )
+
+    def _validate_weight_support(self) -> None:
+        if self.weighting.requires_market_caps and getattr(self.dataset, "weights", None) is None:
+            raise ValueError("Market-cap weighting requested but dataset does not supply weights.")
 
     def _rebalance_offset(self):
         freq = self.config.rebalance_frequency.upper()

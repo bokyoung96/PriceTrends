@@ -71,6 +71,7 @@ class PortfolioTrack:
         tickers: Sequence[str],
         price_slice: pd.DataFrame,
         note: str | None = None,
+        weights: pd.Series | None = None,
     ) -> None:
         capital_in = float(self.capital)
         requested = tuple(tickers)
@@ -115,7 +116,8 @@ class PortfolioTrack:
             )
             return
 
-        quantities, ledger_entries = self._build_position_ledgers(entries, exits, investable)
+        normalized_weights = self._normalize_weights(entries.index, weights)
+        quantities, ledger_entries = self._build_position_ledgers(entries, exits, investable, normalized_weights)
         if quantities.empty:
             hint = note or "Unable to determine position sizes."
             self._carry_forward(
@@ -278,21 +280,43 @@ class PortfolioTrack:
             equity.iloc[-1] = exit_capital
         return equity
 
+    def _normalize_weights(self, tickers: Sequence[str], weights: pd.Series | None) -> pd.Series | None:
+        if weights is None:
+            return None
+        working = pd.Series(weights, dtype=float).reindex(tickers)
+        if working.isna().any():
+            return None
+        working = working.clip(lower=0.0)
+        total = working.sum()
+        if total <= 0:
+            return None
+        return working / total
+
     def _build_position_ledgers(
         self,
         entries: pd.Series,
         exits: pd.Series,
         investable: float,
+        weights: pd.Series | None = None,
     ) -> tuple[pd.Series, Tuple[PositionLedgerEntry, ...]]:
         if entries.empty or investable <= 0:
             return pd.Series(dtype=float), tuple()
-        per_position = investable / len(entries)
+        if weights is None:
+            allocation = pd.Series(1.0 / len(entries), index=entries.index, dtype=float)
+        else:
+            allocation = weights.reindex(entries.index).fillna(0.0)
         ledger_entries: list[PositionLedgerEntry] = []
         quantities: Dict[str, float] = {}
         for ticker, entry_price in entries.items():
             if entry_price <= 0:
                 continue
-            qty = per_position / float(entry_price)
+            share = float(allocation.get(ticker, 0.0))
+            if share <= 0:
+                continue
+            capital = investable * share
+            if capital <= 0:
+                continue
+            qty = capital / float(entry_price)
             exit_price = float(exits.get(ticker, entry_price))
             ticker_id = str(ticker)
             quantities[ticker_id] = float(qty)

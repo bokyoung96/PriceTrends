@@ -4,6 +4,8 @@ import logging
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -29,6 +31,7 @@ def _build_config(**overrides) -> BacktestConfig:
     base: dict[str, object] = {}
     if DEFAULT_UNIVERSE is not None:
         base["constituent_universe"] = DEFAULT_UNIVERSE
+    base["portfolio_weighting"] = "mc"
     base.update(overrides)
     return BacktestConfig(**base)
 
@@ -72,4 +75,29 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+
+    tester = run_single_example()
+    report = tester.latest_report()
+    position_rows = []
+    for group_id, portfolio in report.groups.items():
+        for trade in portfolio.trades:
+            entry_capital = trade.capital_in or 0.0
+            for pos in trade.positions:
+                entry_weight = 0.0 if entry_capital == 0 else pos.entry_value / entry_capital
+                position_rows.append(
+                    {
+                        "group": group_id,
+                        "enter": trade.enter_date,
+                        "ticker": pos.ticker,
+                        "entry_weight": entry_weight,
+                    }
+                )
+    positions_df = pd.DataFrame(position_rows)
+    weight_matrix = (
+        positions_df
+        .set_index(["enter", "group", "ticker"])["entry_weight"]
+        .unstack(fill_value=0.0)
+        .sort_index()
+    )
+    res = weight_matrix.xs("q5", level="group")
