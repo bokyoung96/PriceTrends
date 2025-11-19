@@ -9,8 +9,6 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class QuantileAllocation:
-    """Tickers assigned to each quantile bucket for one rebalance date."""
-
     groups: Dict[int, Tuple[str, ...]]
     total_assets: int
     skipped: bool = False
@@ -24,8 +22,6 @@ class QuantileAllocation:
 
 
 class QuantileAllocator:
-    """Splits cross-sectional scores into equally populated groups."""
-
     def __init__(self, quantiles: int, min_assets: int, allow_partial: bool = False) -> None:
         if quantiles < 2:
             raise ValueError("At least two quantiles are required.")

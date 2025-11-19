@@ -33,17 +33,17 @@ def _default_weight_data_path() -> Path:
     return DATA_ROOT / "METRIC_MKTCAP.parquet"
 
 
-class PortfolioWeighting(str, Enum):
+class PortfolioWeights(str, Enum):
     EQUAL = "eq"
     MARKET_CAP = "mc"
 
     @property
     def requires_market_caps(self) -> bool:
-        return self is PortfolioWeighting.MARKET_CAP
+        return self is PortfolioWeights.MARKET_CAP
 
     @classmethod
-    def parse(cls, raw: "PortfolioWeighting | str") -> "PortfolioWeighting":
-        if isinstance(raw, PortfolioWeighting):
+    def parse(cls, raw: "PortfolioWeights | str") -> "PortfolioWeights":
+        if isinstance(raw, PortfolioWeights):
             return raw
         normalized = str(raw).strip().lower()
         if normalized in {"eq", "equal", "ew"}:
@@ -70,7 +70,7 @@ class BacktestConfig:
     allow_partial_buckets: bool = False
     portfolio_grouping: PortfolioGroupingStrategy | None = None
 
-    portfolio_weighting: PortfolioWeighting | str = PortfolioWeighting.EQUAL
+    portfolio_weighting: PortfolioWeights | str = PortfolioWeights.EQUAL
     weight_data_path: Path | str | None = field(default_factory=_default_weight_data_path)
 
     apply_trading_costs: bool = False
@@ -85,10 +85,10 @@ class BacktestConfig:
         object.__setattr__(self, "scores_path", prepared_scores)
         object.__setattr__(self, "close_path", self._to_project_path(self.close_path))
         object.__setattr__(self, "output_dir", self._to_project_path(self.output_dir))
-        object.__setattr__(self, "constituent_path", self._select_constituent_path())
-        weighting = PortfolioWeighting.parse(self.portfolio_weighting)
+        object.__setattr__(self, "constituent_path", self._get_constituent_path())
+        weighting = PortfolioWeights.parse(self.portfolio_weighting)
         object.__setattr__(self, "portfolio_weighting", weighting)
-        weight_path = self._prepare_weight_data_path(self.weight_data_path)
+        weight_path = self._get_weight_path(self.weight_data_path)
         object.__setattr__(self, "weight_data_path", weight_path)
         if weighting.requires_market_caps and weight_path is None:
             raise ValueError("Market-cap weighting requires 'weight_data_path' to be set.")
@@ -107,18 +107,14 @@ class BacktestConfig:
             raise ValueError("At least one score file must be provided.")
         return tuple(self._to_project_path(path) for path in candidates)
 
-    def _select_constituent_path(self) -> Path | None:
-        if self.constituent_path is not None:
-            return self._to_project_path(self.constituent_path)
-        if self.constituent_universe is None:
-            return None
-        universe_path = DATA_ROOT / self.constituent_universe.parquet_filename
-        return self._to_project_path(universe_path)
+    def _get_constituent_path(self) -> Path | None:
+        universe_name = getattr(self.constituent_universe, "parquet_filename", None)
+        universe_path = universe_name and DATA_ROOT / universe_name
+        selected = self.constituent_path or universe_path
+        return selected and self._to_project_path(selected)
 
-    def _prepare_weight_data_path(self, raw: Path | str | None) -> Path | None:
-        if raw is None:
-            return None
-        return self._to_project_path(raw)
+    def _get_weight_path(self, raw: Path | str | None) -> Path | None:
+        return raw is not None and self._to_project_path(raw) or None
 
     def grouping_strategy(self) -> PortfolioGroupingStrategy:
         if self.portfolio_grouping is not None:

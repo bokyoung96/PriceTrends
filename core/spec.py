@@ -41,7 +41,7 @@ class MarketMetric(Enum):
 
     @property
     def parquet_filename(self) -> str:
-        return f"METRIC_{self.value}.parquet"
+        return f"{self.value}.parquet"
 
 
 @dataclass(frozen=True)
@@ -126,6 +126,51 @@ class DatasetFactory:
             preprocessors=preprocessors,
         )
 
+    def metrics(
+        self,
+        *,
+        metric: MarketMetric = MarketMetric.FOREIGN,
+        windows: Sequence[int] = (5, 20, 60),
+        source_name: str | None = None,
+        header_row: int = 7,
+        skip_rows: int = 6,
+        index_column: int | str | None = 0,
+    ) -> dict[int, DatasetSpec]:
+        if not windows:
+            raise ValueError("At least one rolling window must be provided")
+
+        unique_windows: list[int] = []
+        for window in windows:
+            if window <= 0:
+                raise ValueError(f"Rolling window must be positive, received {window}")
+            if window not in unique_windows:
+                unique_windows.append(window)
+
+        base_preprocessors: Sequence[DatasetPreprocessor] = [
+            slice_rows(skip_rows),
+            drop_invalid_marker(),
+            ensure_datetime_index(),
+            drop_all_na_columns(),
+        ]
+
+        specs: dict[int, DatasetSpec] = {}
+        source = self.data_root / (source_name or metric.source_filename)
+        for window in unique_windows:
+            preprocessors = list(base_preprocessors) + [
+                ensure_numeric_values(),
+                rolling_sum(window),
+                drop_all_na_columns(),
+            ]
+            specs[window] = DatasetSpec(
+                name=f"metric:{metric.value}:{window}",
+                source=source,
+                output=self.data_root / f"FOREIGN_{window}.parquet",
+                header_row=header_row,
+                index_column=index_column,
+                preprocessors=preprocessors,
+            )
+        return specs
+
 
 def slice_rows(start: int) -> DatasetPreprocessor:
     def _inner(df: pd.DataFrame) -> pd.DataFrame:
@@ -172,17 +217,36 @@ def lower_column_names() -> DatasetPreprocessor:
     return _inner
 
 
+def ensure_numeric_values() -> DatasetPreprocessor:
+    def _inner(df: pd.DataFrame) -> pd.DataFrame:
+        return df.apply(pd.to_numeric, errors="coerce")
+
+    return _inner
+
+
+def rolling_sum(window: int) -> DatasetPreprocessor:
+    def _inner(df: pd.DataFrame) -> pd.DataFrame:
+        rolled = df.sort_index().rolling(window=window, min_periods=window).sum()
+        return rolled.iloc[window - 1 :]
+
+    return _inner
+
+
 if __name__ == "__main__":
     factory = DatasetFactory()
+    res: dict[str, pd.DataFrame] = {}
     examples = {
-        "constituent": factory.constituents(market=MarketUniverse.KOSPI200),
-        "metric:mktcap": factory.metric(metric=MarketMetric.MKTCAP),
-        "metric:trans_ban": factory.metric(metric=MarketMetric.TRANS_BAN),
-        # "metric:foreign": factory.metric(metric=MarketMetric.FOREIGN),
+        # "constituent": factory.constituents(market=MarketUniverse.KOSPI200),
+        # "metric:mktcap": factory.metric(metric=MarketMetric.MKTCAP),
+        # "metric:trans_ban": factory.metric(metric=MarketMetric.TRANS_BAN),
+        "metric:foreign": factory.metrics(),
     }
     for label, spec in examples.items():
         try:
-            print(f"Converting {label}: {spec.source} -> {spec.output}")
-            spec.convert()
-        except FileNotFoundError as exc:
-            print(f"Skipping {label}: {exc}")
+            if isinstance(spec, dict):
+                for window, window_spec in spec.items():
+                    res[f"{label}:{window}"] = window_spec.convert()
+            else:
+                res[label] = spec.convert()
+        except FileNotFoundError:
+            continue
