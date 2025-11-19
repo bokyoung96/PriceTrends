@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.config import BacktestConfig, PortfolioWeighting
+from backtest.config import BacktestConfig, PortfolioWeights
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataset
 from backtest.grouping import PortfolioGroupingStrategy
@@ -301,7 +301,7 @@ class BacktestEngine:
     ) -> pd.Series | None:
         if not tickers:
             return None
-        if self.weighting is not PortfolioWeighting.MARKET_CAP:
+        if self.weighting is not PortfolioWeights.MARKET_CAP:
             return None
         if weight_row is None:
             self._log_weight_fallback(group_id, signal_date, "missing weight row for signal date")

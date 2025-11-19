@@ -9,8 +9,6 @@ def _bps_to_ratio(bps: float) -> float:
 
 @dataclass(frozen=True)
 class ExecutionCostModel:
-    """Applies optional trading costs (slippage, fees, and taxes)."""
-
     enabled: bool = False
     buy_bps: float = 0.0
     sell_bps: float = 0.0
