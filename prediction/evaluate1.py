@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.device import DeviceSelector
 from core.params import CNNConfig, CNNParams
-from core.training import CNNModel, KoreanEquityDataset
+from core.model1 import CNNModel, KoreanEquityDataset
 from utils.root import MODELS_ROOT, RESULTS_ROOT
 
 logger = logging.getLogger(__name__)

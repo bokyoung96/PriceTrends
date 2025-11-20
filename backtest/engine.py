@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.config import BacktestConfig, PortfolioWeights
+from backtest.config import BacktestConfig, PortfolioWeights, EntryPriceMode
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataset
 from backtest.grouping import PortfolioGroupingStrategy
@@ -34,6 +34,7 @@ class WindowPayload:
     scores: pd.Series
     prices: pd.DataFrame
     weights: pd.Series | None = None
+    entry_prices: pd.Series | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,8 @@ class RebalancePlanner:
     def _build_schedule(self) -> list[pd.Timestamp]:
         series = pd.Series(index=self._dates, data=self._dates)
         grouped = series.resample(self.frequency).first().dropna()
-        schedule = [pd.Timestamp(ts) for ts in grouped]
+        # Use resample labels (e.g. month-end, week-end) as signal dates
+        schedule = [pd.Timestamp(ts) for ts in grouped.index]
         last_date = self._dates[-1]
         if not schedule or schedule[-1] != last_date:
             schedule.append(last_date)
@@ -92,7 +94,8 @@ class RebalancePlanner:
         try:
             loc = self._dates.get_loc(signal)
         except KeyError:
-            loc = int(self._dates.searchsorted(signal, side="left"))
+            # Fallback: last available trading day on or before the signal date
+            loc = int(self._dates.searchsorted(signal, side="right")) - 1
         if isinstance(loc, slice):
             loc = loc.start
         idx = loc + int(self.entry_lag)
@@ -233,6 +236,7 @@ class BacktestEngine:
                     price_slice=payload.prices,
                     note=note,
                     weights=weights,
+                    entry_prices=payload.entry_prices,
                 )
 
         reports = {gid: self._build_group_report(portfolio) for gid, portfolio in portfolios.items()}
@@ -274,10 +278,15 @@ class BacktestEngine:
             yield self._window_payload(window)
 
     def _window_payload(self, window: RebalanceWindow) -> WindowPayload:
+        effective_date = window.entry_date
         try:
-            scores_row = self.dataset.scores.loc[window.signal_date]
-        except KeyError as exc:  # noqa: BLE001
-            raise KeyError(f"Missing scores for signal date {window.signal_date}.") from exc
+            scores_row = self.dataset.scores.loc[effective_date]
+        except KeyError:
+            # Fallback: use the last available scores on or before the entry date
+            scores_before = self.dataset.scores.loc[: effective_date]
+            if scores_before.empty:
+                raise KeyError(f"Missing scores for entry date {effective_date}.")
+            scores_row = scores_before.iloc[-1]
         price_slice = self.dataset.prices.loc[window.entry_date : window.exit_date]
         if price_slice.empty:
             raise ValueError(
@@ -287,10 +296,33 @@ class BacktestEngine:
         weights_row = None
         if getattr(self.dataset, "weights", None) is not None:
             try:
-                weights_row = self.dataset.weights.loc[window.signal_date]
+                weights_row = self.dataset.weights.loc[effective_date]
             except KeyError:
-                weights_row = None
-        return WindowPayload(window=window, scores=scores_row, prices=price_slice, weights=weights_row)
+                weights_before = self.dataset.weights.loc[: effective_date]
+                weights_row = weights_before.iloc[-1] if not weights_before.empty else None
+
+        entry_prices = None
+        if self.config.entry_price_mode == EntryPriceMode.NEXT_OPEN:
+            if getattr(self.dataset, "open_prices", None) is None:
+                raise ValueError("EntryPriceMode.NEXT_OPEN requires open_prices in dataset.")
+            try:
+                entry_prices = self.dataset.open_prices.loc[effective_date]
+            except KeyError:
+                # Fallback: try to find the closest open price on or after the effective date
+                # Since we are looking for 'next open', it should ideally be exact.
+                # But if missing, we might look forward slightly or error.
+                # Here we stick to strict or simple fallback.
+                # Let's try to find valid open prices within the window if exact match fails.
+                # For now, strict:
+                raise KeyError(f"Missing open prices for entry date {effective_date}")
+
+        return WindowPayload(
+            window=window,
+            scores=scores_row,
+            prices=price_slice,
+            weights=weights_row,
+            entry_prices=entry_prices,
+        )
 
     def _portfolio_weights(
         self,

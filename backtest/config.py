@@ -6,19 +6,33 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence, Tuple
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.spec import MarketUniverse
+from core.spec import MarketUniverse, MarketMetric
 from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataLoader
 from backtest.grouping import PortfolioGroupingStrategy, QuantileGroupingStrategy
 
 
+def score_path(
+    input_days: int,
+    return_days: int,
+    *,
+    mode: str = "TEST",
+    fusion: bool = False,
+) -> Path:
+    suffix = "_fusion" if fusion else ""
+    mode_str = mode.lower()
+    return SCORES_ROOT / f"price_trends_score_{mode_str}_i{input_days}_r{return_days}{suffix}.parquet"
+
+
 def _default_scores_path() -> Path:
-    return SCORES_ROOT / "price_trends_score_test_i20_r20.parquet"
+    return score_path(20, 20, mode="TEST", fusion=False)
 
 
 def _default_close_path() -> Path:
@@ -30,7 +44,11 @@ def _default_output_path() -> Path:
 
 
 def _default_weight_data_path() -> Path:
-    return DATA_ROOT / "METRIC_MKTCAP.parquet"
+    return DATA_ROOT / MarketMetric.MKTCAP.parquet_filename
+
+
+def _default_open_path() -> Path:
+    return DATA_ROOT / "open.parquet"
 
 
 class PortfolioWeights(str, Enum):
@@ -53,6 +71,22 @@ class PortfolioWeights(str, Enum):
         raise ValueError(f"Unknown portfolio weighting mode: {raw}")
 
 
+class EntryPriceMode(str, Enum):
+    CLOSE = "close"
+    NEXT_OPEN = "next_open"
+
+    @classmethod
+    def parse(cls, raw: "EntryPriceMode | str") -> "EntryPriceMode":
+        if isinstance(raw, EntryPriceMode):
+            return raw
+        normalized = str(raw).strip().lower()
+        if normalized in {"close", "c"}:
+            return cls.CLOSE
+        if normalized in {"next_open", "open", "next", "no"}:
+            return cls.NEXT_OPEN
+        raise ValueError(f"Unknown entry price mode: {raw}")
+
+
 @dataclass(frozen=True)
 class BacktestConfig:
     scores_path: Path | Sequence[Path] = field(default_factory=_default_scores_path)
@@ -73,15 +107,23 @@ class BacktestConfig:
     portfolio_weighting: PortfolioWeights | str = PortfolioWeights.EQUAL
     weight_data_path: Path | str | None = field(default_factory=_default_weight_data_path)
 
+    entry_price_mode: EntryPriceMode | str = EntryPriceMode.CLOSE
+    open_path: Path | str = field(default_factory=_default_open_path)
+
     apply_trading_costs: bool = False
     buy_cost_bps: float = 0.0
     sell_cost_bps: float = 0.0
     tax_bps: float = 0.0
     entry_lag: int = 0
+    tax_bps: float = 0.0
+    entry_lag: int = 0
     show_progress: bool = True
 
+    start_date: str | pd.Timestamp | None = None
+    end_date: str | pd.Timestamp | None = None
+
     def __post_init__(self) -> None:
-        prepared_scores = self._prepare_score_files(self.scores_path)
+        prepared_scores = self._get_score_files(self.scores_path)
         object.__setattr__(self, "scores_path", prepared_scores)
         object.__setattr__(self, "close_path", self._to_project_path(self.close_path))
         object.__setattr__(self, "output_dir", self._to_project_path(self.output_dir))
@@ -92,13 +134,23 @@ class BacktestConfig:
         object.__setattr__(self, "weight_data_path", weight_path)
         if weighting.requires_market_caps and weight_path is None:
             raise ValueError("Market-cap weighting requires 'weight_data_path' to be set.")
+
+        entry_mode = EntryPriceMode.parse(self.entry_price_mode)
+        object.__setattr__(self, "entry_price_mode", entry_mode)
+        object.__setattr__(self, "open_path", self._to_project_path(self.open_path))
+
         self._validate_numeric_fields()
+
+        if self.start_date is not None:
+            object.__setattr__(self, "start_date", pd.Timestamp(self.start_date))
+        if self.end_date is not None:
+            object.__setattr__(self, "end_date", pd.Timestamp(self.end_date))
 
     def _to_project_path(self, raw: Path | str) -> Path:
         path = Path(raw)
         return path if path.is_absolute() else PROJECT_ROOT / path
 
-    def _prepare_score_files(self, raw_paths: Path | Sequence[Path]) -> Tuple[Path, ...]:
+    def _get_score_files(self, raw_paths: Path | Sequence[Path]) -> Tuple[Path, ...]:
         if isinstance(raw_paths, (str, Path)):
             candidates: Sequence[Path | str] = (raw_paths,)
         else:
@@ -145,6 +197,10 @@ class BacktestConfig:
                 raise FileNotFoundError(
                     f"Market cap metric parquet not found: {self.weight_data_path or '<unspecified>'}"
                 )
+        if self.entry_price_mode == EntryPriceMode.NEXT_OPEN:
+            if not prices_in_memory and not Path(self.open_path).exists():
+                raise FileNotFoundError(f"Open price parquet not found: {self.open_path}")
+
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
     def cost_model(self) -> ExecutionCostModel:
@@ -167,6 +223,9 @@ class BacktestConfig:
             constituent_source=self.constituent_path,
             benchmark_symbol=self.benchmark_symbol,
             weight_source=self.weight_data_path if self.portfolio_weighting.requires_market_caps else None,
+            open_source=self.open_path if self.entry_price_mode == EntryPriceMode.NEXT_OPEN else None,
+            start_date=self.start_date,
+            end_date=self.end_date,
         )
 
     def _validate_numeric_fields(self) -> None:
