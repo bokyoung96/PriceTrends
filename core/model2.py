@@ -33,12 +33,18 @@ class ForeignDataset(Dataset):
         self,
         windows: Sequence[int] = (5, 20, 60),
         data_root: Path | None = None,
+        years: Sequence[int] | None = None,
+        norm_years: Sequence[int] | None = None,
     ) -> None:
         if not windows:
             raise ValueError("At least one rolling window must be provided.")
 
-        self.windows = tuple(dict.fromkeys(sorted(windows)))
+        self.windows = tuple(dict.fromkeys(sorted(int(w) for w in windows)))
         self.data_root = Path(data_root) if data_root is not None else DATA_ROOT
+        self.years = tuple(dict.fromkeys(int(y) for y in years)) if years is not None else None
+        self.norm_years = (
+            tuple(dict.fromkeys(int(y) for y in norm_years)) if norm_years is not None else None
+        )
         self.window_paths = {
             window: self.data_root / f"FOREIGN_{window}.parquet" for window in self.windows
         }
@@ -80,29 +86,79 @@ class ForeignDataset(Dataset):
         return df.sort_index()
 
     def _find_common_tickers(self) -> List[str]:
-        common: set[str] | None = None
+        years = self.years
+
+        if years is not None:
+            year_list = list(years)
+            valid: set[str] = set()
+
+            for df in self.foreign_frames.values():
+                if df.empty:
+                    continue
+                year_arr = df.index.year
+                mask = pd.Series(year_arr).isin(year_list).to_numpy()
+                df_year = df.iloc[mask]
+                if df_year.empty:
+                    continue
+                cols_with_data = df_year.columns[df_year.notna().any()].tolist()
+                valid.update(cols_with_data)
+
+            if not valid:
+                return []
+
+            metric = self.metric_df
+            if not metric.empty:
+                year_arr = metric.index.year
+                mask = pd.Series(year_arr).isin(year_list).to_numpy()
+                metric_year = metric.iloc[mask]
+            else:
+                metric_year = metric
+
+            if metric_year.empty:
+                return []
+
+            metric_cols = set(metric_year.columns)
+            valid &= metric_cols
+            return sorted(valid)
+
+        # Fallback: union over all years
+        valid: set[str] = set()
         for df in self.foreign_frames.values():
-            cols = set(df.columns)
-            common = cols if common is None else common & cols
+            if df.empty:
+                continue
+            cols_with_data = df.columns[df.notna().any()].tolist()
+            valid.update(cols_with_data)
         metric_cols = set(self.metric_df.columns)
-        common = metric_cols if common is None else common & metric_cols
-        ordered = sorted(common) if common else []
-        return ordered
+        valid &= metric_cols
+        return sorted(valid)
 
     def _get_window_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.loc[:, self.common_tickers]
-        metric = self.metric_df.loc[:, self.common_tickers]
+        cols = [c for c in self.common_tickers if c in df.columns]
+        if not cols:
+            return pd.DataFrame()
+
+        df = df.loc[:, cols]
+        metric = self.metric_df.loc[:, cols]
         metric = metric.reindex(df.index)
         ratio = df.divide(metric)
         ratio = ratio.replace([np.inf, -np.inf], np.nan)
         normalized = self._zscore_cols(ratio)
+        if self.years is not None:
+            year_arr = normalized.index.year
+            mask = pd.Series(year_arr).isin(list(self.years)).to_numpy()
+            normalized = normalized.iloc[mask]
         normalized = normalized.dropna(how="all")
         return normalized
 
-    @staticmethod
-    def _zscore_cols(df: pd.DataFrame) -> pd.DataFrame:
-        means = df.mean(axis=0)
-        stds = df.std(axis=0, ddof=0).replace(0, np.nan)
+    def _zscore_cols(self, df: pd.DataFrame) -> pd.DataFrame:
+        if self.norm_years is not None:
+            years = df.index.year
+            mask = pd.Series(years).isin(self.norm_years).to_numpy()
+            train_df = df.iloc[mask]
+        else:
+            train_df = df
+        means = train_df.mean(axis=0)
+        stds = train_df.std(axis=0, ddof=0).replace(0, np.nan)
         return (df - means) / stds
 
     def _stack_features(self, processed: Dict[int, pd.DataFrame]) -> pd.DataFrame:
@@ -162,12 +218,17 @@ class FusionDataset(Dataset):
         ws: int,
         years: List[int],
         foreign_windows: Sequence[int] = (5, 20, 60),
+        norm_years: Sequence[int] | None = None,
     ) -> None:
         self.ws = ws
         self.years = years
 
         self.image_dataset = KoreanEquityDataset(intervals=ws, years=years)
-        self.foreign_dataset = ForeignDataset(windows=foreign_windows)
+        self.foreign_dataset = ForeignDataset(
+            windows=foreign_windows,
+            years=years,
+            norm_years=norm_years,
+        )
 
         foreign_frame = self.foreign_dataset.get_frame()
         self.feature_columns = foreign_frame.columns.tolist()
@@ -233,7 +294,12 @@ def get_fusion_dataloaders(
     config: CNNConfig,
     train_ratio: float = 0.7,
 ) -> Dict[str, DataLoader]:
-    full_dataset = FusionDataset(ws=ws, years=train_years, foreign_windows=foreign_windows)
+    full_dataset = FusionDataset(
+        ws=ws,
+        years=train_years,
+        foreign_windows=foreign_windows,
+        norm_years=train_years,
+    )
 
     train_indices, val_indices = train_test_split(
         range(len(full_dataset)),

@@ -19,7 +19,7 @@ from backtest.report import BacktestReport, PortfolioReport
 
 GroupSelector = str | int | Sequence[str | int] | None
 ScoreInput = Path | str | Sequence[Path | str] | None
-LABEL_TOKEN_PREFIXES = ("test", "origin", "i", "r")
+LABEL_TOKEN_PREFIXES = ("test", "origin", "fusion", "i", "r")
 
 
 def _label_from_path(path: Path) -> str:

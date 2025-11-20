@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.spec import MarketUniverse
-from backtest.config import BacktestConfig
+from backtest.config import BacktestConfig, score_path
 from backtest.runner import Backtester
 
 logger = logging.getLogger(__name__)
@@ -31,13 +31,43 @@ def _build_config(**overrides) -> BacktestConfig:
     base: dict[str, object] = {}
     if DEFAULT_UNIVERSE is not None:
         base["constituent_universe"] = DEFAULT_UNIVERSE
-    base["portfolio_weighting"] = "mc"
+    base["portfolio_weighting"] = "eq"
     base.update(overrides)
     return BacktestConfig(**base)
 
 
-def run_single_example() -> Backtester:
-    tester = Backtester(_build_config())
+def run_single_example(
+    input_days: int = 20,
+    return_days: int = 20,
+    mode: str = "TEST",
+    rebalance_frequency: str = "M",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    cfg = _build_config(
+        scores_path=score_path(
+            input_days,
+            return_days,
+            mode=mode,
+            fusion=False,
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(cfg)
     report = tester.run(group_selector=("q1", "q2", "q3", "q4", "q5"))
     logger.info("Single summary:\n%s", report.summary_table())
     output_path = report.save()
@@ -46,12 +76,74 @@ def run_single_example() -> Backtester:
     return tester
 
 
-def run_batch_example() -> Backtester:
+def run_single_fusion_example(
+    input_days: int = 20,
+    return_days: int = 20,
+    mode: str = "TEST",
+    rebalance_frequency: str = "M",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    cfg = _build_config(
+        scores_path=score_path(
+            input_days,
+            return_days,
+            mode=mode,
+            fusion=True,
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(cfg)
+    report = tester.run(group_selector=("q1", "q2", "q3", "q4", "q5"))
+    logger.info("Fusion single summary:\n%s", report.summary_table())
+    output_path = report.save()
+    logger.info("Saved fusion single report to %s", output_path)
+    REGISTRY.latest_single = tester
+    return tester
+
+
+def run_batch_example(
+    input_days: int = 20,
+    return_days: int = 20,
+    rebalance_frequency: str = "M",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
     config = _build_config(
         scores_path=(
-            Path("scores/price_trends_score_test_i20_r20.parquet"),
-            Path("scores/price_trends_score_origin_i20_r20.parquet"),
-        )
+            score_path(input_days, return_days, mode="TEST", fusion=False),
+            score_path(input_days, return_days, mode="ORIGIN", fusion=False),
+            score_path(input_days, return_days, mode="TEST", fusion=True),
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        start_date=start_date,
+        end_date=end_date,
     )
     tester = Backtester(config)
     report = tester.run(group_selector=("q1", "q5"))
@@ -75,29 +167,62 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # main()
+    apply_trading_costs = True
+    buy_cost_bps = 2.0
+    sell_cost_bps = 2.0
+    tax_bps = 15.0
+    entry_lag = 0
+    entry_price_mode = "close"
 
-    tester = run_single_example()
-    report = tester.latest_report()
-    position_rows = []
-    for group_id, portfolio in report.groups.items():
-        for trade in portfolio.trades:
-            entry_capital = trade.capital_in or 0.0
-            for pos in trade.positions:
-                entry_weight = 0.0 if entry_capital == 0 else pos.entry_value / entry_capital
-                position_rows.append(
-                    {
-                        "group": group_id,
-                        "enter": trade.enter_date,
-                        "ticker": pos.ticker,
-                        "entry_weight": entry_weight,
-                    }
-                )
-    positions_df = pd.DataFrame(position_rows)
-    weight_matrix = (
-        positions_df
-        .set_index(["enter", "group", "ticker"])["entry_weight"]
-        .unstack(fill_value=0.0)
-        .sort_index()
+    # tester = run_single_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     mode='TEST',
+    #     rebalance_frequency="M",
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    # )
+
+    tester = run_single_example(
+        input_days=20,
+        return_days=20,
+        mode='ORIGIN',
+        rebalance_frequency="M",
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        start_date="2015-01-31",
+        end_date="2024-12-31",
     )
-    res = weight_matrix.xs("q5", level="group")
+    
+    # tester = run_single_fusion_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     rebalance_frequency="M",
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    # )
+
+    # # Batch comparison (CNN test / origin / fusion)
+    # tester = run_batch_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     rebalance_frequency="M",
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    # )

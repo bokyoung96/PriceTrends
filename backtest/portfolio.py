@@ -72,6 +72,7 @@ class PortfolioTrack:
         price_slice: pd.DataFrame,
         note: str | None = None,
         weights: pd.Series | None = None,
+        entry_prices: pd.Series | None = None,
     ) -> None:
         capital_in = float(self.capital)
         requested = tuple(tickers)
@@ -88,7 +89,9 @@ class PortfolioTrack:
             )
             return
 
-        entry_prices = price_slice.iloc[0]
+            return
+ 
+        entry_prices = entry_prices if entry_prices is not None else price_slice.iloc[0]
         exit_prices = price_slice.iloc[-1]
         entries, exits, halted = self._select_valid_prices(entry_prices, exit_prices, requested)
         if entries.empty:

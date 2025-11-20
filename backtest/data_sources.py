@@ -15,6 +15,7 @@ class BacktestDataset:
     prices: pd.DataFrame
     bench: Optional[pd.Series] = None
     weights: Optional[pd.DataFrame] = None
+    open_prices: Optional[pd.DataFrame] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.scores.index, pd.DatetimeIndex):
@@ -37,6 +38,13 @@ class BacktestDataset:
                 raise ValueError("weights must align with the score index.")
             if not self.weights.columns.equals(self.scores.columns):
                 raise ValueError("weights must expose the same ticker columns as scores/prices.")
+        if self.open_prices is not None:
+            if not isinstance(self.open_prices.index, pd.DatetimeIndex):
+                raise TypeError("open_prices index must be a DatetimeIndex.")
+            if not self.open_prices.index.equals(self.scores.index):
+                raise ValueError("open_prices must align with the score index.")
+            if not self.open_prices.columns.equals(self.scores.columns):
+                raise ValueError("open_prices must expose the same ticker columns as scores/prices.")
 
     @property
     def dates(self) -> pd.DatetimeIndex:
@@ -88,21 +96,29 @@ class BacktestDataLoader:
         constituent_source: FrameSource | None = None,
         benchmark_symbol: str | None = "IKS200",
         weight_source: FrameSource | None = None,
+        open_source: FrameSource | None = None,
+        start_date: pd.Timestamp | None = None,
+        end_date: pd.Timestamp | None = None,
     ) -> None:
         self.scores_source = scores_source
         self.close_source = close_source
         self.constituent_source = constituent_source
         self.benchmark_symbol = benchmark_symbol
         self.weight_source = weight_source
+        self.open_source = open_source
+        self.start_date = start_date
+        self.end_date = end_date
         self._score_loader = FrameLoader("scores")
         self._price_loader = FrameLoader("close")
         self._constituent_loader = FrameLoader("constituent")
         self._weight_loader = FrameLoader("weights") if weight_source is not None else None
+        self._open_loader = FrameLoader("open") if open_source is not None else None
 
     def build(self) -> BacktestDataset:
         scores = self._score_loader.load(self.scores_source)
         prices = self._price_loader.load(self.close_source)
         weights = self._weight_loader.load(self.weight_source) if self._weight_loader is not None else None
+        open_prices = self._open_loader.load(self.open_source) if self._open_loader is not None else None
         bench = None
         if self.benchmark_symbol and self.benchmark_symbol in prices.columns:
             bench = prices[self.benchmark_symbol]
@@ -112,13 +128,37 @@ class BacktestDataLoader:
             bench,
             bench_symbol=self.benchmark_symbol,
         )
-        aligned_weights = self._align_weights(weights, aligned_scores.index, aligned_scores.columns)
+        aligned_weights = self._align_optional(weights, aligned_scores.index, aligned_scores.columns)
+        aligned_open = self._align_optional(open_prices, aligned_scores.index, aligned_scores.columns)
         if self.constituent_source is not None:
             mask = self._constituent_loader.load(self.constituent_source)
-            aligned_scores, aligned_prices, aligned_weights = self._apply_constituent_mask(
-                aligned_scores, aligned_prices, mask, aligned_weights
+            aligned_scores, aligned_prices, aligned_weights, aligned_open = self._apply_constituent_mask(
+                aligned_scores, aligned_prices, mask, aligned_weights, aligned_open
             )
-        return BacktestDataset(scores=aligned_scores, prices=aligned_prices, bench=bench_series, weights=aligned_weights)
+        if self.start_date is not None or self.end_date is not None:
+            aligned_scores = self._filter_dates(aligned_scores)
+            aligned_prices = self._filter_dates(aligned_prices)
+            if bench_series is not None:
+                bench_series = self._filter_dates(bench_series)
+            if aligned_weights is not None:
+                aligned_weights = self._filter_dates(aligned_weights)
+            if aligned_open is not None:
+                aligned_open = self._filter_dates(aligned_open)
+
+        return BacktestDataset(
+            scores=aligned_scores,
+            prices=aligned_prices,
+            bench=bench_series,
+            weights=aligned_weights,
+            open_prices=aligned_open,
+        )
+
+    def _filter_dates(self, data: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
+        if self.start_date:
+            data = data[data.index >= self.start_date]
+        if self.end_date:
+            data = data[data.index <= self.end_date]
+        return data
 
     def _align(
         self,
@@ -150,15 +190,15 @@ class BacktestDataLoader:
         bench_series = bench.reindex(valid_index).ffill().dropna() if bench is not None else None
         return scores, prices, bench_series
 
-    def _align_weights(
+    def _align_optional(
         self,
-        weights: Optional[pd.DataFrame],
+        frame: Optional[pd.DataFrame],
         target_index: pd.Index,
         target_columns: pd.Index,
     ) -> Optional[pd.DataFrame]:
-        if weights is None:
+        if frame is None:
             return None
-        aligned = weights.reindex(target_index).ffill()
+        aligned = frame.reindex(target_index).ffill()
         aligned = aligned.reindex(columns=target_columns)
         aligned = aligned.loc[target_index]
         return aligned
@@ -169,7 +209,8 @@ class BacktestDataLoader:
         prices: pd.DataFrame,
         mask: pd.DataFrame,
         weights: Optional[pd.DataFrame] = None,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+        open_prices: Optional[pd.DataFrame] = None,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         mask_frame = mask.reindex(scores.index).ffill().fillna(0.0)
         mask_frame = mask_frame.reindex(columns=scores.columns).fillna(0.0)
         masked_scores = scores.where(mask_frame > 0)
@@ -182,4 +223,8 @@ class BacktestDataLoader:
         if weights is not None:
             masked_weights = weights.where(mask_frame > 0)
             masked_weights = masked_weights.loc[:, valid_cols]
-        return masked_scores, masked_prices, masked_weights
+        masked_open = None
+        if open_prices is not None:
+            masked_open = open_prices.where(mask_frame > 0)
+            masked_open = masked_open.loc[:, valid_cols]
+        return masked_scores, masked_prices, masked_weights, masked_open

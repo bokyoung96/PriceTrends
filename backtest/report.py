@@ -602,7 +602,7 @@ class BacktestReport:
         tokens = [
             token
             for token in stem.split("_")
-            if token.lower().startswith(("test", "origin", "i", "r"))
+            if token.lower().startswith(("test", "origin", "i", "r", "fusion"))
         ]
         suffix = "_".join(tokens) if tokens else stem
         freq = self.config.rebalance_frequency.upper()
