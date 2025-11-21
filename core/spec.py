@@ -34,6 +34,7 @@ class MarketMetric(Enum):
     MKTCAP = "MKTCAP"
     FOREIGN = "FOREIGN"
     TRANS_BAN = "TRANS_BAN"
+    BM = "BM"
 
     @property
     def source_filename(self) -> str:
@@ -171,6 +172,22 @@ class DatasetFactory:
             )
         return specs
 
+    def bm(
+        self,
+        *,
+        source_name: str | None = None,
+        header_row: int = 7,
+        skip_rows: int = 6,
+        index_column: int | str | None = 0,
+    ) -> DatasetSpec:
+        return self.metric(
+            metric=MarketMetric.BM,
+            source_name=source_name,
+            header_row=header_row,
+            skip_rows=skip_rows,
+            index_column=index_column,
+        )
+
 
 def slice_rows(start: int) -> DatasetPreprocessor:
     def _inner(df: pd.DataFrame) -> pd.DataFrame:
@@ -239,7 +256,8 @@ if __name__ == "__main__":
         # "constituent": factory.constituents(market=MarketUniverse.KOSPI200),
         # "metric:mktcap": factory.metric(metric=MarketMetric.MKTCAP),
         # "metric:trans_ban": factory.metric(metric=MarketMetric.TRANS_BAN),
-        "metric:foreign": factory.metrics(),
+        "metric:bm": factory.bm(),
+        # "metric:foreign": factory.metrics(),
     }
     for label, spec in examples.items():
         try:

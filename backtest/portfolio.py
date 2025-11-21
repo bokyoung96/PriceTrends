@@ -88,8 +88,6 @@ class PortfolioTrack:
                 price_slice=price_slice,
             )
             return
-
-            return
  
         entry_prices = entry_prices if entry_prices is not None else price_slice.iloc[0]
         exit_prices = price_slice.iloc[-1]
