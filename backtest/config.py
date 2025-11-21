@@ -25,9 +25,12 @@ def score_path(
     *,
     mode: str = "TEST",
     fusion: bool = False,
+    ensemble: bool = False,
 ) -> Path:
     suffix = "_fusion" if fusion else ""
     mode_str = mode.lower()
+    if ensemble:
+        return SCORES_ROOT / f"price_trends_score_{mode_str}_ensemble{suffix}.parquet"
     return SCORES_ROOT / f"price_trends_score_{mode_str}_i{input_days}_r{return_days}{suffix}.parquet"
 
 

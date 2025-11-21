@@ -22,6 +22,7 @@ class FusionResultRepository:
     def fetch(self, input_days: int, return_days: int) -> pd.DataFrame:
         file_path = (
             self.base_dir
+            / "fusion"
             / f"price_trends_results_{self.mode}_i{input_days}_r{return_days}_fusion.parquet"
         )
         if not file_path.exists():
@@ -150,5 +151,7 @@ def main(
 
 
 if __name__ == "__main__":
-    analyzer = main(mode="TEST", pairs=(5, 5), include_average=False)
+    analyzer = main(mode='TEST',
+                    pairs=((5, 5), (20, 20), (60, 60)),
+                    include_average=True)
 
