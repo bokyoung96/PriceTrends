@@ -166,6 +166,131 @@ def run_batch_example(
     return tester
 
 
+def run_ensemble_example(
+    mode: str = "TEST",
+    rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    cfg = _build_config(
+        portfolio_weighting=portfolio_weighting,
+        scores_path=score_path(
+            # NOTE: input / return as dummy variable 0
+            input_days=0,
+            return_days=0,
+            mode=mode,
+            fusion=False,
+            ensemble=True,
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(cfg)
+    report = tester.run(group_selector=("q1", "q2", "q3", "q4", "q5"))
+    logger.info("Ensemble (%s) summary:\n%s", mode, report.summary_table())
+    output_path = report.save()
+    logger.info("Saved ensemble (%s) report to %s", mode, output_path)
+    return tester
+
+
+def run_ensemble_fusion_example(
+    mode: str = "TEST",
+    rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    cfg = _build_config(
+        portfolio_weighting=portfolio_weighting,
+        scores_path=score_path(
+            input_days=0,
+            return_days=0,
+            mode=mode,
+            fusion=True,
+            ensemble=True,
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(cfg)
+    report = tester.run(group_selector=("q1", "q2", "q3", "q4", "q5"))
+    logger.info("Ensemble Fusion (%s) summary:\n%s", mode, report.summary_table())
+    output_path = report.save()
+    logger.info("Saved ensemble fusion (%s) report to %s", mode, output_path)
+    return tester
+
+
+def run_ensemble_batch_example(
+    rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    config = _build_config(
+        portfolio_weighting=portfolio_weighting,
+        scores_path=(
+            score_path(0, 0, mode="TEST", fusion=False, ensemble=True),
+            score_path(0, 0, mode="ORIGIN", fusion=False, ensemble=True),
+            score_path(0, 0, mode="TEST", fusion=True, ensemble=True),
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(config)
+    report = tester.run(group_selector=("q1", "q5"))
+    logger.info("Ensemble Batch summary:\n%s", report.summary_table())
+    output_path = report.save()
+    logger.info("Saved ensemble batch comparison report to %s", output_path)
+    REGISTRY.latest_batch = tester
+    return tester
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
@@ -173,9 +298,17 @@ def main() -> None:
     except Exception as exc:
         logger.warning("Single example failed: %s", exc)
     try:
-        run_batch_example()
+        run_ensemble_example()
     except Exception as exc:
-        logger.warning("Batch example failed: %s", exc)
+        logger.warning("Ensemble example failed: %s", exc)
+    try:
+        run_ensemble_fusion_example()
+    except Exception as exc:
+        logger.warning("Ensemble fusion example failed: %s", exc)
+    try:
+        run_ensemble_batch_example()
+    except Exception as exc:
+        logger.warning("Ensemble batch example failed: %s", exc)
 
 
 if __name__ == "__main__":
@@ -183,44 +316,56 @@ if __name__ == "__main__":
     buy_cost_bps = 2.0
     sell_cost_bps = 2.0
     tax_bps = 15.0
-    entry_lag = 1
+    entry_lag = 0
     entry_price_mode = "close"
     benchmark = BenchmarkType.KOSPI200EQ
     portfolio_weighting = "eq"
 
-    tester = run_single_example(
-        input_days=20,
-        return_days=20,
-        mode='TEST',
-        rebalance_frequency="M",
-        portfolio_weighting=portfolio_weighting,
-        apply_trading_costs=apply_trading_costs,
-        buy_cost_bps=buy_cost_bps,
-        sell_cost_bps=sell_cost_bps,
-        tax_bps=tax_bps,
-        entry_lag=entry_lag,
-        entry_price_mode=entry_price_mode,
-        benchmark=benchmark,
-    )
+    # tester = run_single_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     mode='TEST',
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )
 
-    tester = run_single_example(
-        input_days=20,
-        return_days=20,
-        mode='ORIGIN',
-        rebalance_frequency="M",
-        portfolio_weighting=portfolio_weighting,
-        apply_trading_costs=apply_trading_costs,
-        buy_cost_bps=buy_cost_bps,
-        sell_cost_bps=sell_cost_bps,
-        tax_bps=tax_bps,
-        entry_lag=entry_lag,
-        entry_price_mode=entry_price_mode,
-        benchmark=benchmark,
-    )
+    # tester = run_single_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     mode='ORIGIN',
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )
     
-    tester = run_single_fusion_example(
-        input_days=20,
-        return_days=20,
+    # tester = run_single_fusion_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )
+
+    tester = run_ensemble_fusion_example(
         rebalance_frequency="M",
         portfolio_weighting=portfolio_weighting,
         apply_trading_costs=apply_trading_costs,
@@ -232,17 +377,30 @@ if __name__ == "__main__":
         benchmark=benchmark,
     )
 
-    # Batch comparison (CNN test / origin / fusion)
-    tester = run_batch_example(
-        input_days=20,
-        return_days=20,
-        rebalance_frequency="M",
-        portfolio_weighting=portfolio_weighting,
-        apply_trading_costs=apply_trading_costs,
-        buy_cost_bps=buy_cost_bps,
-        sell_cost_bps=sell_cost_bps,
-        tax_bps=tax_bps,
-        entry_lag=entry_lag,
-        entry_price_mode=entry_price_mode,
-        benchmark=benchmark,
-    )
+    # # Batch comparison (CNN test / origin / fusion)
+    # tester = run_batch_example(
+    #     input_days=20,
+    #     return_days=20,
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )
+
+    # # Ensemble Batch comparison
+    # tester = run_ensemble_batch_example(
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )

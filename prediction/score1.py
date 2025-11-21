@@ -21,7 +21,10 @@ class ResultRepository:
         self.base_dir = RESULTS_ROOT
 
     def fetch(self, input_days: int, return_days: int) -> pd.DataFrame:
-        file_path = self.base_dir / f"price_trends_results_{self.mode}_i{input_days}_r{return_days}.parquet"
+        # NOTE: Exception for ORIGIN modes
+        file_mode = 'test' if self.mode == 'origin' else self.mode
+        
+        file_path = self.base_dir / self.mode / f"price_trends_results_{file_mode}_i{input_days}_r{return_days}.parquet"
         if not file_path.exists():
             raise FileNotFoundError(
                 f"No result file found for I{input_days}/R{return_days} (mode={self.mode}) in {self.base_dir}"
@@ -135,6 +138,6 @@ def main(
 
 
 if __name__ == "__main__":
-    analyzer = main(mode='TEST',
-                    pairs=(5, 5),
-                    include_average=False)
+    analyzer = main(mode='ORIGIN',
+                    pairs=((5, 5), (20, 20), (60, 60)),
+                    include_average=True)

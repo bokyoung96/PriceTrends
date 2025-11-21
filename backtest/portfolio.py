@@ -141,6 +141,7 @@ class PortfolioTrack:
             quantities=quantities,
             investable=investable,
             exit_capital=capital_out,
+            entry_prices=entry_prices,
         )
 
         trade_note = self._merge_notes(note, self._halted_message(halted))
@@ -265,6 +266,7 @@ class PortfolioTrack:
         quantities: pd.Series,
         investable: float,
         exit_capital: float,
+        entry_prices: pd.Series | None = None,
     ) -> pd.Series | None:
         if investable <= 0 or quantities.empty:
             return None
@@ -277,7 +279,8 @@ class PortfolioTrack:
         values = working.mul(quantities, axis=1)
         equity = values.sum(axis=1)
         if not equity.empty:
-            equity.iloc[0] = investable
+            if entry_prices is None:
+                equity.iloc[0] = investable
             equity.iloc[-1] = exit_capital
         return equity
 
