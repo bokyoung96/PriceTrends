@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.spec import MarketUniverse
-from backtest.config import BacktestConfig, score_path
+from backtest.config import BacktestConfig, BenchmarkType, score_path
 from backtest.runner import Backtester
 
 logger = logging.getLogger(__name__)
@@ -27,11 +27,11 @@ class ExampleRegistry:
 REGISTRY = ExampleRegistry()
 
 
-def _build_config(**overrides) -> BacktestConfig:
+def _build_config(portfolio_weighting: str = "mc", **overrides) -> BacktestConfig:
     base: dict[str, object] = {}
     if DEFAULT_UNIVERSE is not None:
         base["constituent_universe"] = DEFAULT_UNIVERSE
-    base["portfolio_weighting"] = "eq"
+    base["portfolio_weighting"] = portfolio_weighting
     base.update(overrides)
     return BacktestConfig(**base)
 
@@ -41,16 +41,19 @@ def run_single_example(
     return_days: int = 20,
     mode: str = "TEST",
     rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
     apply_trading_costs: bool = False,
     buy_cost_bps: float = 0.0,
     sell_cost_bps: float = 0.0,
     tax_bps: float = 0.0,
     entry_lag: int = 0,
     entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> Backtester:
     cfg = _build_config(
+        portfolio_weighting=portfolio_weighting,
         scores_path=score_path(
             input_days,
             return_days,
@@ -64,6 +67,7 @@ def run_single_example(
         tax_bps=tax_bps,
         entry_lag=entry_lag,
         entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
         start_date=start_date,
         end_date=end_date,
     )
@@ -81,16 +85,19 @@ def run_single_fusion_example(
     return_days: int = 20,
     mode: str = "TEST",
     rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
     apply_trading_costs: bool = False,
     buy_cost_bps: float = 0.0,
     sell_cost_bps: float = 0.0,
     tax_bps: float = 0.0,
     entry_lag: int = 0,
     entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> Backtester:
     cfg = _build_config(
+        portfolio_weighting=portfolio_weighting,
         scores_path=score_path(
             input_days,
             return_days,
@@ -104,6 +111,7 @@ def run_single_fusion_example(
         tax_bps=tax_bps,
         entry_lag=entry_lag,
         entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
         start_date=start_date,
         end_date=end_date,
     )
@@ -120,16 +128,19 @@ def run_batch_example(
     input_days: int = 20,
     return_days: int = 20,
     rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
     apply_trading_costs: bool = False,
     buy_cost_bps: float = 0.0,
     sell_cost_bps: float = 0.0,
     tax_bps: float = 0.0,
     entry_lag: int = 0,
     entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> Backtester:
     config = _build_config(
+        portfolio_weighting=portfolio_weighting,
         scores_path=(
             score_path(input_days, return_days, mode="TEST", fusion=False),
             score_path(input_days, return_days, mode="ORIGIN", fusion=False),
@@ -142,6 +153,7 @@ def run_batch_example(
         tax_bps=tax_bps,
         entry_lag=entry_lag,
         entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
         start_date=start_date,
         end_date=end_date,
     )
@@ -167,62 +179,70 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    apply_trading_costs = True
+    apply_trading_costs = False
     buy_cost_bps = 2.0
     sell_cost_bps = 2.0
     tax_bps = 15.0
-    entry_lag = 0
+    entry_lag = 1
     entry_price_mode = "close"
-
-    # tester = run_single_example(
-    #     input_days=20,
-    #     return_days=20,
-    #     mode='TEST',
-    #     rebalance_frequency="M",
-    #     apply_trading_costs=apply_trading_costs,
-    #     buy_cost_bps=buy_cost_bps,
-    #     sell_cost_bps=sell_cost_bps,
-    #     tax_bps=tax_bps,
-    #     entry_lag=entry_lag,
-    #     entry_price_mode=entry_price_mode,
-    # )
+    benchmark = BenchmarkType.KOSPI200EQ
+    portfolio_weighting = "eq"
 
     tester = run_single_example(
         input_days=20,
         return_days=20,
-        mode='ORIGIN',
+        mode='TEST',
         rebalance_frequency="M",
+        portfolio_weighting=portfolio_weighting,
         apply_trading_costs=apply_trading_costs,
         buy_cost_bps=buy_cost_bps,
         sell_cost_bps=sell_cost_bps,
         tax_bps=tax_bps,
         entry_lag=entry_lag,
         entry_price_mode=entry_price_mode,
-        start_date="2015-01-31",
-        end_date="2024-12-31",
+        benchmark=benchmark,
+    )
+
+    tester = run_single_example(
+        input_days=20,
+        return_days=20,
+        mode='ORIGIN',
+        rebalance_frequency="M",
+        portfolio_weighting=portfolio_weighting,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark=benchmark,
     )
     
-    # tester = run_single_fusion_example(
-    #     input_days=20,
-    #     return_days=20,
-    #     rebalance_frequency="M",
-    #     apply_trading_costs=apply_trading_costs,
-    #     buy_cost_bps=buy_cost_bps,
-    #     sell_cost_bps=sell_cost_bps,
-    #     tax_bps=tax_bps,
-    #     entry_lag=entry_lag,
-    #     entry_price_mode=entry_price_mode,
-    # )
+    tester = run_single_fusion_example(
+        input_days=20,
+        return_days=20,
+        rebalance_frequency="M",
+        portfolio_weighting=portfolio_weighting,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark=benchmark,
+    )
 
-    # # Batch comparison (CNN test / origin / fusion)
-    # tester = run_batch_example(
-    #     input_days=20,
-    #     return_days=20,
-    #     rebalance_frequency="M",
-    #     apply_trading_costs=apply_trading_costs,
-    #     buy_cost_bps=buy_cost_bps,
-    #     sell_cost_bps=sell_cost_bps,
-    #     tax_bps=tax_bps,
-    #     entry_lag=entry_lag,
-    #     entry_price_mode=entry_price_mode,
-    # )
+    # Batch comparison (CNN test / origin / fusion)
+    tester = run_batch_example(
+        input_days=20,
+        return_days=20,
+        rebalance_frequency="M",
+        portfolio_weighting=portfolio_weighting,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark=benchmark,
+    )

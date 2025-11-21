@@ -94,7 +94,8 @@ class BacktestDataLoader:
         close_source: FrameSource,
         *,
         constituent_source: FrameSource | None = None,
-        benchmark_symbol: str | None = "IKS200",
+        benchmark_symbol: str | None = None,
+        benchmark_source: FrameSource | None = None,
         weight_source: FrameSource | None = None,
         open_source: FrameSource | None = None,
         start_date: pd.Timestamp | None = None,
@@ -104,13 +105,17 @@ class BacktestDataLoader:
         self.close_source = close_source
         self.constituent_source = constituent_source
         self.benchmark_symbol = benchmark_symbol
+        self.benchmark_source = benchmark_source
         self.weight_source = weight_source
         self.open_source = open_source
         self.start_date = start_date
         self.end_date = end_date
         self._score_loader = FrameLoader("scores")
         self._price_loader = FrameLoader("close")
+        self._score_loader = FrameLoader("scores")
+        self._price_loader = FrameLoader("close")
         self._constituent_loader = FrameLoader("constituent")
+        self._benchmark_loader = FrameLoader("benchmark") if benchmark_source is not None else None
         self._weight_loader = FrameLoader("weights") if weight_source is not None else None
         self._open_loader = FrameLoader("open") if open_source is not None else None
 
@@ -119,9 +124,16 @@ class BacktestDataLoader:
         prices = self._price_loader.load(self.close_source)
         weights = self._weight_loader.load(self.weight_source) if self._weight_loader is not None else None
         open_prices = self._open_loader.load(self.open_source) if self._open_loader is not None else None
+        weights = self._weight_loader.load(self.weight_source) if self._weight_loader is not None else None
+        open_prices = self._open_loader.load(self.open_source) if self._open_loader is not None else None
         bench = None
-        if self.benchmark_symbol and self.benchmark_symbol in prices.columns:
-            bench = prices[self.benchmark_symbol]
+        if self.benchmark_symbol and self._benchmark_loader is not None:
+            bench_df = self._benchmark_loader.load(self.benchmark_source)
+            if self.benchmark_symbol in bench_df.columns:
+                bench = bench_df[self.benchmark_symbol]
+            else:
+                print(f"Warning: Benchmark symbol '{self.benchmark_symbol}' not found in benchmark source.")
+        
         aligned_scores, aligned_prices, bench_series = self._align(
             scores,
             prices,
@@ -172,6 +184,7 @@ class BacktestDataLoader:
         if not common_cols:
             raise ValueError("No overlapping tickers between scores and prices.")
 
+        # Exclude benchmark symbol from scores and prices if present
         aligned_cols = [c for c in common_cols if not bench_symbol or c != bench_symbol]
         if not aligned_cols:
             raise ValueError("All overlapping tickers were reserved for the benchmark column.")

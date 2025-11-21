@@ -51,6 +51,35 @@ def _default_open_path() -> Path:
     return DATA_ROOT / "open.parquet"
 
 
+def _default_benchmark_path() -> Path:
+    return DATA_ROOT / MarketMetric.BM.parquet_filename
+
+
+class BenchmarkType(str, Enum):
+    KOSPI200 = "IKS200"
+    KOSPI200EQ = "IKS500"
+    KOSPI200TR = "IKS270"
+    KOSPI = "IKS001"
+    KOSPITR = "IKS170"
+    KOSPIBIG = "IKS002"
+    KOSPIMID = "IKS003"
+    KOSPISMALL = "IKS004"
+
+    @classmethod
+    def parse(cls, raw: "BenchmarkType | str | None") -> "BenchmarkType | None":
+        if raw is None:
+            return None
+        if isinstance(raw, BenchmarkType):
+            return raw
+        normalized = str(raw).strip().upper()
+        if normalized in cls.__members__:
+            return cls[normalized]
+        for member in cls:
+            if member.value == normalized:
+                return member
+        raise ValueError(f"Unknown benchmark type: {raw}")
+
+
 class PortfolioWeights(str, Enum):
     EQUAL = "eq"
     MARKET_CAP = "mc"
@@ -100,7 +129,9 @@ class BacktestConfig:
     rebalance_frequency: str = "M"
     min_assets: int = 20
     active_quantiles: Sequence[int] | None = None
-    benchmark_symbol: str | None = "IKS200"
+    active_quantiles: Sequence[int] | None = None
+    benchmark_symbol: BenchmarkType | str | None = BenchmarkType.KOSPI200
+    benchmark_path: Path | str = field(default_factory=_default_benchmark_path)
     allow_partial_buckets: bool = False
     portfolio_grouping: PortfolioGroupingStrategy | None = None
 
@@ -138,6 +169,10 @@ class BacktestConfig:
         entry_mode = EntryPriceMode.parse(self.entry_price_mode)
         object.__setattr__(self, "entry_price_mode", entry_mode)
         object.__setattr__(self, "open_path", self._to_project_path(self.open_path))
+        
+        bench_type = BenchmarkType.parse(self.benchmark_symbol)
+        object.__setattr__(self, "benchmark_symbol", bench_type)
+        object.__setattr__(self, "benchmark_path", self._to_project_path(self.benchmark_path))
 
         self._validate_numeric_fields()
 
@@ -200,6 +235,9 @@ class BacktestConfig:
         if self.entry_price_mode == EntryPriceMode.NEXT_OPEN:
             if not prices_in_memory and not Path(self.open_path).exists():
                 raise FileNotFoundError(f"Open price parquet not found: {self.open_path}")
+        if self.benchmark_symbol is not None:
+            if not Path(self.benchmark_path).exists():
+                raise FileNotFoundError(f"Benchmark parquet not found: {self.benchmark_path}")
 
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -221,7 +259,8 @@ class BacktestConfig:
             scores_source=scores if scores is not None else self.scores_path[0],
             close_source=prices if prices is not None else self.close_path,
             constituent_source=self.constituent_path,
-            benchmark_symbol=self.benchmark_symbol,
+            benchmark_symbol=self.benchmark_symbol.value if self.benchmark_symbol else None,
+            benchmark_source=self.benchmark_path,
             weight_source=self.weight_data_path if self.portfolio_weighting.requires_market_caps else None,
             open_source=self.open_path if self.entry_price_mode == EntryPriceMode.NEXT_OPEN else None,
             start_date=self.start_date,
