@@ -8,14 +8,14 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from core.device import DeviceSelector
-from core.model1 import CNNModel
-from core.model2 import FusionDataset, ForeignFeatureMLP, FusionModel
+from core.models.model1 import CNNModel
+from core.models.model2 import FusionDataset, ForeignFeatureMLP, FusionModel
 from core.params import CNNConfig, CNNParams
-from prediction.evaluate1 import BatchResultCollector, GetResult
+from prediction.evaluations.evaluate1 import BatchResultCollector, GetResult
 from utils.root import MODELS_ROOT
 
 
