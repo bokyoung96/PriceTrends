@@ -1,3 +1,3 @@
-from .data_pipeline import RawTensorConfig, RawWindows, RawWindowBuilder
+from .pipeline import Config, Windows, Pipeline
 
-__all__ = ["RawTensorConfig", "RawWindows", "RawWindowBuilder"]
+__all__ = ["Config", "Windows", "Pipeline"]
