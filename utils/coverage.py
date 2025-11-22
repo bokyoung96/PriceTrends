@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.model1 import KoreanEquityDataset
-from core.model2 import ForeignDataset
+from core.models.model1 import KoreanEquityDataset
+from core.models.model2 import ForeignDataset
 
 
 @dataclass

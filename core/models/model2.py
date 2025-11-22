@@ -14,12 +14,12 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.device import DeviceSelector
-from core.model1 import CNNModel, KoreanEquityDataset, init_weights
+from core.models.model1 import CNNModel, KoreanEquityDataset, init_weights
 from core.params import CNNConfig, CNNParams
 from core.spec import MarketMetric
 from utils.root import DATA_ROOT, MODELS_ROOT

@@ -15,8 +15,8 @@ results_d
 DATA.xlsx
 DATA
 Images
-models
-scores
+/models
+/scores
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -9,12 +9,12 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from core.device import DeviceSelector
 from core.params import CNNConfig, CNNParams
-from core.model1 import CNNModel, KoreanEquityDataset
+from core.models.model1 import CNNModel, KoreanEquityDataset
 from utils.root import MODELS_ROOT, RESULTS_ROOT
 
 logger = logging.getLogger(__name__)
