@@ -330,7 +330,7 @@ class Trainer:
                         running_corrects += torch.sum(preds == labels.data)
 
                 epoch_loss = running_loss / len(loader.dataset)
-                epoch_acc = running_corrects.double() / len(loader.dataset)
+                epoch_acc = running_corrects.float() / len(loader.dataset)
                 logger.info('%s Loss: %.4f Acc: %.4f', phase, epoch_loss, epoch_acc)
 
                 if not is_train:

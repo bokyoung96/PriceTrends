@@ -94,7 +94,7 @@ class Trainer:
                         pbar.set_postfix({'loss': loss.item()})
                 
                 ep_loss = run_loss / total
-                ep_acc = run_acc.double() / total
+                ep_acc = run_acc.float() / total
                 
                 logger.info(f"{phase} Loss: {ep_loss:.4f} Acc: {ep_acc:.4f}")
                 
