@@ -19,7 +19,7 @@ class TransformerConfig:
     d_model: int
     nhead: int
     n_layers: int
-    d_ff: int:
+    d_ff: int
     drop: float
     features: List[str]
     norm: str

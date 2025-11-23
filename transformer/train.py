@@ -13,10 +13,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.device import DeviceSelector
-from utils.root import MODELS_ROOT
 from transformer.model import Transformer
-from transformer.pipeline import Config, get_loaders
 from transformer.params import TransformerParams
+from transformer.pipeline import Config, get_loaders
+from utils.root import MODELS_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
         
     params = TransformerParams()
-    tcfg = params.get_config(mode="TEST", timeframe="MEDIUM")
+    tcfg = params.get_config(mode="TEST", timeframe="LONG")
     
     cfg = Config(
         lookback=tcfg.lookback,
