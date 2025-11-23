@@ -101,7 +101,7 @@ class Trainer:
                 if phase == 'validate':
                     if ep_loss < best_loss:
                         best_loss = ep_loss
-                        torch.save(model.state_dict(), self.dir / "best.pth")
+                        torch.save(model.state_dict(), self.dir / "checkpoint0.pth")
                         logger.info(f"Saved best: {best_loss:.4f}")
 
 

@@ -12,11 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.spec import MarketUniverse, MarketMetric
-from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataLoader
-from backtest.grouping import PortfolioGroupingStrategy, QuantileGroupingStrategy
+from backtest.grouping import (PortfolioGroupingStrategy,
+                               QuantileGroupingStrategy)
+from core.spec import MarketMetric, MarketUniverse
+from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
 
 
 def score_path(
@@ -32,6 +33,22 @@ def score_path(
     if ensemble:
         return SCORES_ROOT / f"price_trends_score_{mode_str}_ensemble{suffix}.parquet"
     return SCORES_ROOT / f"price_trends_score_{mode_str}_i{input_days}_r{return_days}{suffix}.parquet"
+
+
+def transformer_score_path(
+    mode: str = "TEST",
+    timeframe: str = "MEDIUM",
+    name: str = "transformer",
+) -> Path:
+    mode_str = mode.lower()
+    timeframe_str = timeframe.lower()
+
+    if name == "transformer":
+        full_name = f"transformer_{mode_str}_{timeframe_str}"
+    else:
+        full_name = name
+        
+    return SCORES_ROOT / f"price_trends_score_{full_name}.parquet"
 
 
 def _default_scores_path() -> Path:
