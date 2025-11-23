@@ -215,7 +215,7 @@ class BacktestConfig:
         return tuple(self._to_project_path(path) for path in candidates)
 
     def _get_constituent_path(self) -> Path | None:
-        universe_name = getattr(self.constituent_universe, "parquet_filename", None)
+        universe_name = getattr(self.constituent_universe, "parquet_filename", None) if self.constituent_universe else None
         universe_path = universe_name and DATA_ROOT / universe_name
         selected = self.constituent_path or universe_path
         return selected and self._to_project_path(selected)

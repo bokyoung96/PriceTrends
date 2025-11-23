@@ -29,8 +29,7 @@ REGISTRY = ExampleRegistry()
 
 def _build_config(portfolio_weighting: str = "mc", **overrides) -> BacktestConfig:
     base: dict[str, object] = {}
-    if DEFAULT_UNIVERSE is not None:
-        base["constituent_universe"] = DEFAULT_UNIVERSE
+    base["constituent_universe"] = DEFAULT_UNIVERSE
     base["portfolio_weighting"] = portfolio_weighting
     base.update(overrides)
     return BacktestConfig(**base)
@@ -366,6 +365,7 @@ if __name__ == "__main__":
     entry_price_mode = "close"
     benchmark = None
     portfolio_weighting = "eq"
+    DEFAULT_UNIVERSE = None
 
     tester = run_transformer_example(
         mode="TEST",
