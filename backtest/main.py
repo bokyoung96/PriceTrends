@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.spec import MarketUniverse
-from backtest.config import BacktestConfig, BenchmarkType, score_path
+from backtest.config import BacktestConfig, BenchmarkType, score_path, transformer_score_path
 from backtest.runner import Backtester
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,47 @@ def run_single_fusion_example(
     logger.info("Fusion single summary:\n%s", report.summary_table())
     output_path = report.save()
     logger.info("Saved fusion single report to %s", output_path)
+    REGISTRY.latest_single = tester
+    return tester
+
+
+def run_transformer_example(
+    mode: str = "TEST",
+    timeframe: str = "MEDIUM",
+    rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    cfg = _build_config(
+        portfolio_weighting=portfolio_weighting,
+        scores_path=transformer_score_path(
+            mode=mode,
+            timeframe=timeframe,
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(cfg)
+    report = tester.run(group_selector=("q1", "q2", "q3", "q4", "q5"))
+    logger.info("Transformer (%s/%s) summary:\n%s", mode, timeframe, report.summary_table())
+    output_path = report.save()
+    logger.info("Saved transformer report to %s", output_path)
     REGISTRY.latest_single = tester
     return tester
 
@@ -294,21 +335,26 @@ def run_ensemble_batch_example(
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        run_single_example()
+        run_transformer_example()
     except Exception as exc:
-        logger.warning("Single example failed: %s", exc)
-    try:
-        run_ensemble_example()
-    except Exception as exc:
-        logger.warning("Ensemble example failed: %s", exc)
-    try:
-        run_ensemble_fusion_example()
-    except Exception as exc:
-        logger.warning("Ensemble fusion example failed: %s", exc)
-    try:
-        run_ensemble_batch_example()
-    except Exception as exc:
-        logger.warning("Ensemble batch example failed: %s", exc)
+        logger.warning("Transformer example failed: %s", exc)
+    
+    # try:
+    #     run_single_example()
+    # except Exception as exc:
+    #     logger.warning("Single example failed: %s", exc)
+    # try:
+    #     run_ensemble_example()
+    # except Exception as exc:
+    #     logger.warning("Ensemble example failed: %s", exc)
+    # try:
+    #     run_ensemble_fusion_example()
+    # except Exception as exc:
+    #     logger.warning("Ensemble fusion example failed: %s", exc)
+    # try:
+    #     run_ensemble_batch_example()
+    # except Exception as exc:
+    #     logger.warning("Ensemble batch example failed: %s", exc)
 
 
 if __name__ == "__main__":
@@ -318,8 +364,22 @@ if __name__ == "__main__":
     tax_bps = 15.0
     entry_lag = 0
     entry_price_mode = "close"
-    benchmark = BenchmarkType.KOSPI200EQ
+    benchmark = None
     portfolio_weighting = "eq"
+
+    tester = run_transformer_example(
+        mode="TEST",
+        timeframe="MEDIUM",
+        rebalance_frequency="M",
+        portfolio_weighting=portfolio_weighting,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark=benchmark,
+    )
 
     # tester = run_single_example(
     #     input_days=20,
@@ -365,17 +425,17 @@ if __name__ == "__main__":
     #     benchmark=benchmark,
     # )
 
-    tester = run_ensemble_fusion_example(
-        rebalance_frequency="M",
-        portfolio_weighting=portfolio_weighting,
-        apply_trading_costs=apply_trading_costs,
-        buy_cost_bps=buy_cost_bps,
-        sell_cost_bps=sell_cost_bps,
-        tax_bps=tax_bps,
-        entry_lag=entry_lag,
-        entry_price_mode=entry_price_mode,
-        benchmark=benchmark,
-    )
+    # tester = run_ensemble_fusion_example(
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )
 
     # # Batch comparison (CNN test / origin / fusion)
     # tester = run_batch_example(

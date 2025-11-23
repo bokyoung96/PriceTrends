@@ -3,11 +3,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Protocol
 
+import gc
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset as TorchDataset, DataLoader, Subset
 from tqdm import tqdm
+from numpy.lib.format import open_memmap
 
 from core.loader import DataLoader as CoreLoader
 
@@ -125,7 +127,7 @@ class WindowMaker(IWindowMaker):
 
 
     def make(self, panel: Panel, frames: Dict[str, pd.DataFrame]) -> Windows:
-        from numpy.lib.format import open_memmap
+
         
         close = frames["close"]
         dates = close.index.to_numpy()
@@ -158,7 +160,7 @@ class WindowMaker(IWindowMaker):
         targets, d_list, a_list = [], [], []
         counter = 0
         
-        from tqdm import tqdm
+
 
         for s in tqdm(range(0, max_start + 1, self.cfg.stride), desc="Creating windows"):
             e = s + self.cfg.lookback
@@ -189,12 +191,14 @@ class WindowMaker(IWindowMaker):
 
         if counter == 0: raise RuntimeError("No windows")
 
-        d = np.asarray(data_mmap[:counter], dtype=np.float32)
+        d = np.array(data_mmap[:counter], dtype=np.float32).copy()
         t = np.concatenate(targets, axis=0).astype(np.float32)
         dt = np.concatenate(d_list, axis=0)
         at = np.concatenate(a_list, axis=0)
         
         del data_mmap
+        gc.collect()
+        
         if temp_path.exists():
             temp_path.unlink()
         

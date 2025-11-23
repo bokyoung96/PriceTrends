@@ -100,8 +100,7 @@ class Transformer(nn.Module):
             dropout=drop,
             activation="gelu",
             batch_first=True,
-            norm_first=True,
-            enable_nested_tensor=False
+            norm_first=True
         )
         self.enc = nn.TransformerEncoder(layer, num_layers=n_layers)
         
