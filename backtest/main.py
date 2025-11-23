@@ -10,9 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.spec import MarketUniverse
-from backtest.config import BacktestConfig, BenchmarkType, score_path, transformer_score_path
+from backtest.config import (BacktestConfig, BenchmarkType, score_path,
+                             transformer_score_path)
 from backtest.runner import Backtester
+from core.spec import MarketUniverse
 
 logger = logging.getLogger(__name__)
 DEFAULT_UNIVERSE: MarketUniverse | None = MarketUniverse.KOSPI200
@@ -365,11 +366,11 @@ if __name__ == "__main__":
     entry_price_mode = "close"
     benchmark = None
     portfolio_weighting = "eq"
-    DEFAULT_UNIVERSE = None
+    DEFAULT_UNIVERSE = MarketUniverse.KOSPI200
 
     tester = run_transformer_example(
         mode="TEST",
-        timeframe="MEDIUM",
+        timeframe="LONG",
         rebalance_frequency="M",
         portfolio_weighting=portfolio_weighting,
         apply_trading_costs=apply_trading_costs,
