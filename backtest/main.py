@@ -333,6 +333,50 @@ def run_ensemble_batch_example(
     return tester
 
 
+def run_comparison_example(
+    input_days: int = 20,
+    return_days: int = 20,
+    rebalance_frequency: str = "M",
+    portfolio_weighting: str = "mc",
+    apply_trading_costs: bool = False,
+    buy_cost_bps: float = 0.0,
+    sell_cost_bps: float = 0.0,
+    tax_bps: float = 0.0,
+    entry_lag: int = 0,
+    entry_price_mode: str = "close",
+    benchmark: BenchmarkType | str = BenchmarkType.KOSPI200,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Backtester:
+    config = _build_config(
+        portfolio_weighting=portfolio_weighting,
+        scores_path=(
+            score_path(input_days, return_days, mode="ORIGIN", fusion=False),
+            score_path(input_days, return_days, mode="TEST", fusion=False),
+            score_path(input_days, return_days, mode="TEST", fusion=True),
+            transformer_score_path(mode="TEST", timeframe="MEDIUM"),
+            transformer_score_path(mode="TEST", timeframe="LONG"),
+        ),
+        rebalance_frequency=rebalance_frequency,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark_symbol=benchmark,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    tester = Backtester(config)
+    report = tester.run(group_selector="q5")
+    logger.info("Comprehensive Batch summary:\n%s", report.summary_table())
+    output_path = report.save()
+    logger.info("Saved comprehensive comparison report to %s", output_path)
+    REGISTRY.latest_batch = tester
+    return tester
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
@@ -368,15 +412,15 @@ if __name__ == "__main__":
     tax_bps = 15.0
     entry_lag = 0
     entry_price_mode = "close"
-    benchmark = None
+    benchmark = BenchmarkType.KOSPI200EQ
     portfolio_weighting = "eq"
     DEFAULT_UNIVERSE = MarketUniverse.KOSPI200
 
     # NOTE: Validation
-    tester = run_validation_example(
-        rebalance_frequency="M",
-        start_date="2012-01-01",
-    )
+    # tester = run_validation_example(
+    #     rebalance_frequency="M",
+    #     start_date="2012-01-01",
+    # )
 
     # tester = run_transformer_example(
     #     mode="TEST",
@@ -390,7 +434,23 @@ if __name__ == "__main__":
     #     entry_lag=entry_lag,
     #     entry_price_mode=entry_price_mode,
     #     benchmark=benchmark,
+    #     start_date="2012-01-31",
     # )
+
+    tester = run_comparison_example(
+        input_days=20,
+        return_days=20,
+        rebalance_frequency="M",
+        portfolio_weighting=portfolio_weighting,
+        apply_trading_costs=apply_trading_costs,
+        buy_cost_bps=buy_cost_bps,
+        sell_cost_bps=sell_cost_bps,
+        tax_bps=tax_bps,
+        entry_lag=entry_lag,
+        entry_price_mode=entry_price_mode,
+        benchmark=benchmark,
+        start_date="2012-01-31",
+    )
 
     # tester = run_single_example(
     #     input_days=20,
