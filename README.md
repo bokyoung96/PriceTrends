@@ -2,104 +2,114 @@
 
 ## 📈 Overview
 
-PriceTrends is a research framework for **stock‑price trend prediction**. It contains two pipelines:
+PriceTrends is a research framework for **stock‑price trend prediction**. It integrates deep learning models (CNN, Transformer) with a robust backtesting engine to evaluate trading strategies based on predicted trends.
 
-1. **CNN pipeline** (under `core/` & `prediction/`) – converts OHLCV data into chart images and trains a convolutional model.
-2. **Transformer pipeline** (under `transformer/`) – works directly on the raw time‑series using a custom Transformer with Variable Selection Network.
-
-Both pipelines share the same data‑loader utilities and can be mixed‑and‑matched.
+The framework consists of three main pillars:
+1.  **CNN Pipeline** (`core/` & `prediction/`) – Converts OHLCV data into chart images and trains a Convolutional Neural Network.
+2.  **Transformer Pipeline** (`transformer/`) – Processes raw time‑series data using a custom Transformer with Variable Selection Network.
+3.  **Backtest Engine** (`backtest/`) – A flexible, event-driven backtester for validating strategies, supporting various weighting schemes, transaction costs, and benchmarking.
 
 ---
 
 ## 🛠️ Modules
 
 | Module | Description |
-|--------|-------------|
-| `core/` | CSV/XLSX → Parquet conversion, generic data loader, CNN utilities |
-| `prediction/` | Image generation, CNN evaluation & scoring |
-| `transformer/` | End‑to‑end Transformer model, feature engineering, mem‑mapped window creation |
-| `daily/` | Scripts for daily‑run orchestration |
-| `utils/` | Helper utilities (path constants, quick image viewer) |
+| :--- | :--- |
+| `core/` | Data loading, preprocessing, and CNN model definitions. |
+| `prediction/` | Image generation for CNN, model evaluation, and scoring. |
+| `transformer/` | End‑to‑end Transformer model, feature engineering, and training scripts. |
+| `backtest/` | **[NEW]** Comprehensive backtesting engine (Portfolio, Engine, Reporting). |
+| `daily/` | Scripts for daily operational tasks and orchestration. |
+| `utils/` | Helper utilities for path management and visualization. |
 
 ---
 
-## 🚀 Transformer Pipeline Highlights
+## 🚀 Key Features
 
-- **Memory‑efficient window creation** – `pipeline.WindowMaker.make` now uses **`numpy.memmap`** (inspired by the CNN implementation). This allows `stride=1` (daily rolling windows) without blowing up RAM.
-- **Config redesign** – `config.json` separates **mode** (`TEST` / `PRODUCTION`) from **timeframe** (`SHORT`, `MEDIUM`, `LONG`). You can now combine them freely, e.g. `params.get_config(mode="TEST", timeframe="MEDIUM")`.
-- **Progress bars** – Both data loading and training loops are wrapped with **`tqdm`**, giving you live feedback on window generation, epoch progress, and batch processing.
-- **Cross‑platform** – Works on macOS (Apple MPS), CUDA, and CPU. No platform‑specific code.
+### 1. Transformer Pipeline
+-   **Memory‑Efficient**: Uses `numpy.memmap` for window creation, enabling `stride=1` (daily rolling windows) on large datasets without RAM issues.
+-   **Flexible Configuration**: `config.json` separates **mode** (`TEST`/`PRODUCTION`) from **timeframe** (`SHORT`/`MEDIUM`/`LONG`), allowing mix-and-match experiments.
+-   **Progress Tracking**: Integrated `tqdm` for real-time feedback on data loading and training.
+
+### 2. Backtest Engine
+-   **Event-Driven**: Simulates daily rebalancing with realistic constraints (entry lag, transaction costs, taxes).
+-   **Multi-Strategy Support**: Compare multiple strategies (e.g., CNN vs. Transformer vs. Ensemble) in a single run.
+-   **Rich Reporting**: Generates detailed performance reports including:
+    -   Cumulative Returns & Equity Curves
+    -   Drawdown Analysis
+    -   Monthly Return Heatmaps
+    -   Win Rate & Sharpe Ratio
+-   **Validation**: Includes logic to validate backtest assumptions against benchmarks (e.g., KOSPI 200).
 
 ---
 
-## 📦 Quick Start (Transformer)
+## 📦 Quick Start
 
+### Prerequisites
+-   Python 3.8+
+-   Dependencies listed in `requirements.txt`
+
+### 1. Data Preparation
+Ensure your OHLCV data (Parquet format) is located in the `DATA/` directory.
+
+### 2. Training a Model (Transformer)
 ```bash
-# 1️⃣ Install dependencies
-pip install -r requirements.txt
-
-# 2️⃣ Prepare data (parquet files under DATA/)
-#    (use the existing core.loader utilities)
-
-# 3️⃣ Train a model (example: TEST + MEDIUM configuration)
+# Train a Transformer model with TEST mode and MEDIUM timeframe
 python transformer/train.py
 ```
 
-The script will:
-1. **Load / generate windows** – shows a tqdm bar like `Creating windows: 100%|████| 6290/6290`.
-2. **Build DataLoaders** – also wrapped with tqdm (you’ll see `Loading batches…`).
-3. **Train** – each epoch displays `Ep 1/10 - train` and `Ep 1/10 - validate` progress bars.
+### 3. Running a Backtest
+The `backtest/main.py` script serves as the entry point for running backtests.
 
----
-
-## 📊 Adding tqdm to Data Loading (optional)
-
-If you want a progress bar while the `DataLoader` iterates over batches, the `Trainer.train` method already uses:
-
-```python
-pbar = tqdm(loader, desc=f"Ep {ep+1}/{epochs} - {phase}")
+```bash
+# Run a comprehensive comparison of multiple models
+python backtest/main.py
 ```
 
-You can also wrap the **window creation** step manually (already done) or any custom preprocessing step with `tqdm`.
+You can customize the backtest in `backtest/main.py`:
+```python
+tester = run_comprehensive_comparison_example(
+    input_days=20,
+    return_days=20,
+    rebalance_frequency="M",  # Monthly rebalancing
+    start_date="2012-01-01",
+    # ...
+)
+```
 
 ---
 
-## 🛡️ Known Issues & Fixes
-
-- **Label dtype error** – `StockDataset.__getitem__` now casts the label to `int` before creating a `torch.long` tensor, fixing the `TypeError: 'numpy.float32' object cannot be interpreted as an integer`.
-- **Memory usage** – Thanks to `numpy.memmap`, you can safely set `stride=1` for daily rolling windows without OOM crashes.
-- **Cross‑platform** – The code checks for `torch.backends.mps.is_available()` and falls back to CPU if MPS is not present.
-
----
-
-## 📚 Documentation
-
-- English README (this file) – explains the overall project and how to run the Transformer pipeline.
-- Korean README – see `transformer/README_KR.md` for a Korean version of the Transformer documentation.
-
----
-
-## 📂 Project Tree (excerpt)
+## � Project Structure
 
 ```
 PriceTrends/
-├── core/
-├── prediction/
-├── transformer/
-│   ├── README.md            # English docs (this file)
-│   ├── README_KR.md         # Korean docs
-│   ├── model.py
-│   ├── pipeline.py          # memmap window creation
-│   ├── params.py            # mode + timeframe config loader
-│   ├── train.py
-│   └── ...
-├── daily/
-├── utils/
-└── README.md                # Top‑level project overview (this file)
+├── backtest/            # Backtesting engine & reporting
+│   ├── engine.py        # Core simulation logic
+│   ├── portfolio.py     # Portfolio state management
+│   ├── report.py        # Performance analysis & visualization
+│   └── main.py          # Backtest entry point
+├── core/                # Core data & CNN modules
+├── prediction/          # CNN prediction & scoring
+├── transformer/         # Transformer model & pipeline
+│   ├── model.py         # Network architecture
+│   ├── train.py         # Training script
+│   └── params.py        # Configuration management
+├── daily/               # Daily operation scripts
+├── utils/               # Utility functions
+├── DATA/                # Market data (Parquet)
+├── scores/              # Model prediction scores
+└── results/             # Backtest reports & artifacts
 ```
 
 ---
 
-## 🎉 Thanks
+## 📝 Documentation
 
-Feel free to open issues or submit pull requests. Happy modeling!
+-   **Pipeline Details**: See `pipeline.md` for a deep dive into the data processing and training workflows.
+-   **Transformer Docs**: Check `transformer/README.md` for specific details on the Transformer implementation.
+
+---
+
+## 🎉 Contributing
+
+Feel free to open issues or submit pull requests to improve the framework. Happy trading!
