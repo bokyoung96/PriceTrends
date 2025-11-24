@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 from backtest.config import (BacktestConfig, BenchmarkType, score_path,
                              transformer_score_path)
 from backtest.runner import Backtester
+from backtest.validate import run_validation_example
 from core.spec import MarketUniverse
 
 logger = logging.getLogger(__name__)
@@ -358,6 +359,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, 
+                        format="%(message)s")
+    
     apply_trading_costs = False
     buy_cost_bps = 2.0
     sell_cost_bps = 2.0
@@ -368,19 +372,25 @@ if __name__ == "__main__":
     portfolio_weighting = "eq"
     DEFAULT_UNIVERSE = MarketUniverse.KOSPI200
 
-    tester = run_transformer_example(
-        mode="TEST",
-        timeframe="LONG",
+    # NOTE: Validation
+    tester = run_validation_example(
         rebalance_frequency="M",
-        portfolio_weighting=portfolio_weighting,
-        apply_trading_costs=apply_trading_costs,
-        buy_cost_bps=buy_cost_bps,
-        sell_cost_bps=sell_cost_bps,
-        tax_bps=tax_bps,
-        entry_lag=entry_lag,
-        entry_price_mode=entry_price_mode,
-        benchmark=benchmark,
+        start_date="2012-01-01",
     )
+
+    # tester = run_transformer_example(
+    #     mode="TEST",
+    #     timeframe="MEDIUM",
+    #     rebalance_frequency="M",
+    #     portfolio_weighting=portfolio_weighting,
+    #     apply_trading_costs=apply_trading_costs,
+    #     buy_cost_bps=buy_cost_bps,
+    #     sell_cost_bps=sell_cost_bps,
+    #     tax_bps=tax_bps,
+    #     entry_lag=entry_lag,
+    #     entry_price_mode=entry_price_mode,
+    #     benchmark=benchmark,
+    # )
 
     # tester = run_single_example(
     #     input_days=20,
