@@ -251,6 +251,21 @@ class Backtester:
         return self.latest_report().daily_return_frame()
 
     @property
+    def monthly_return_df(self) -> pd.DataFrame | None:
+        report = self.latest_report()
+
+        matrices = {}
+        for group_id, group_report in report.groups.items():
+             matrix = report._monthly_return_matrix(group_report.equity_curve, months=1200)
+             if matrix is not None:
+                 matrices[group_id] = matrix
+        
+        if report.bench_equity is not None and not report.bench_equity.empty:
+            bench_matrix = report._monthly_return_matrix(report.bench_equity, months=1200)
+            if bench_matrix is not None:
+                matrices["benchmark"] = bench_matrix
+
+        return pd.concat(matrices, axis=0) if matrices else None
     def daily_pnl_df(self) -> pd.DataFrame:
         return self.latest_report().daily_pnl_frame()
 
