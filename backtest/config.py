@@ -290,8 +290,8 @@ class BacktestConfig:
     def _validate_numeric_fields(self) -> None:
         if self.initial_capital <= 0:
             raise ValueError("initial_capital must be positive.")
-        if self.quantiles < 2:
-            raise ValueError("quantiles must be at least 2.")
+        if self.quantiles < 1:
+            raise ValueError("quantiles must be at least 1.")
         if self.min_assets < self.quantiles:
             raise ValueError("min_assets must be >= quantiles to form buckets.")
         for field_name in ("buy_cost_bps", "sell_cost_bps", "tax_bps"):

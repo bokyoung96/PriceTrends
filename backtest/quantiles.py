@@ -23,8 +23,8 @@ class QuantileAllocation:
 
 class QuantileAllocator:
     def __init__(self, quantiles: int, min_assets: int, allow_partial: bool = False) -> None:
-        if quantiles < 2:
-            raise ValueError("At least two quantiles are required.")
+        if quantiles < 1:
+            raise ValueError("At least one quantile is required.")
         self.quantiles = quantiles
         self.min_assets = min_assets
         self.allow_partial = allow_partial
