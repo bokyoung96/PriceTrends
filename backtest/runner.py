@@ -19,14 +19,24 @@ from backtest.report import BacktestReport, PortfolioReport
 
 GroupSelector = str | int | Sequence[str | int] | None
 ScoreInput = Path | str | Sequence[Path | str] | None
-LABEL_TOKEN_PREFIXES = ("test", "origin", "fusion", "i", "r", "transformer", "short", "medium", "long")
+LABEL_TOKEN_PREFIXES = ("test", "origin", "fusion", "i", "r", "transformer", "short", "medium", "long", "lp")
 
 
 def _label_from_path(path: Path) -> str:
-    tokens = [tok for tok in path.stem.split("_") if tok.lower().startswith(LABEL_TOKEN_PREFIXES)]
-    label = "_".join(tokens) if tokens else path.stem
-    # print(f"DEBUG: path={path.name}, tokens={tokens}, label={label}")
-    return label
+    parts = path.stem.split("_")
+    tokens: list[str] = []
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        lower = part.lower()
+        if lower.startswith(LABEL_TOKEN_PREFIXES):
+            if lower == "lp" and i + 1 < len(parts) and parts[i + 1].isdigit():
+                tokens.append(f"{part}_{parts[i + 1]}")
+                i += 2
+                continue
+            tokens.append(part)
+        i += 1
+    return "_".join(tokens) if tokens else path.stem
 
 
 def _parse_score_inputs(value: ScoreInput) -> tuple[Path, ...] | None:
