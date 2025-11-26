@@ -35,6 +35,7 @@ class ExampleSpec:
     overrides: Dict[str, object] = field(default_factory=dict)
     log_summary: bool = True
     save_report: bool = True
+    sector_neutral: bool = False
 
 
 class ExampleRunner:
@@ -46,6 +47,7 @@ class ExampleRunner:
         cfg_kwargs = dict(self.base_opts)
         cfg_kwargs.update(spec.overrides)
         cfg_kwargs["scores_path"] = spec.scores
+        cfg_kwargs["sector_neutral"] = spec.sector_neutral
         cfg = _build_config(**cfg_kwargs)
         tester = Backtester(cfg)
         report = tester.run(group_selector=spec.group_selector)
@@ -83,7 +85,7 @@ def _transformer_scores_lp(mode: str = "TEST") -> Tuple[Path, ...]:
         transformer_score_path(mode=mode, timeframe="MEDIUM"),
         transformer_score_path(mode=mode, timeframe="LONG"),
         transformer_score_path(mode=mode, name="transformer_test_medium_lp_126"),
-        # transformer_score_path(mode=mode, name="transformer_test_medium_lp_252"),
+        transformer_score_path(mode=mode, name="transformer_test_medium_lp_252"),
     )
 
 
@@ -122,6 +124,13 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         name="full_comparison",
         scores=_cnn_scores() + _transformer_scores_default() + _transformer_scores_lp(),
         group_selector="q5",
+    ),
+    "transformer_long_sector_neutral": ExampleSpec(
+        name="transformer_lp_sector_neutral",
+        scores=_transformer_scores_default(),
+        group_selector="q5",
+        sector_neutral=True,
+        overrides={"min_assets": 5},
     ),
 }
 
@@ -174,5 +183,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    examples = ("transformer_lp",)
+    examples = ("transformer_long_sector_neutral",)
     main(examples)

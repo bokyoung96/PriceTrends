@@ -15,7 +15,8 @@ if str(ROOT) not in sys.path:
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataLoader
 from backtest.grouping import (PortfolioGroupingStrategy,
-                               QuantileGroupingStrategy)
+                               QuantileGroupingStrategy,
+                               SectorNeutralGroupingStrategy)
 from core.spec import MarketMetric, MarketUniverse
 from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
 
@@ -73,6 +74,10 @@ def _default_open_path() -> Path:
 
 def _default_benchmark_path() -> Path:
     return DATA_ROOT / MarketMetric.BM.parquet_filename
+
+
+def _default_sector_path() -> Path:
+    return DATA_ROOT / MarketMetric.SECTOR.parquet_filename
 
 
 class BenchmarkType(str, Enum):
@@ -153,6 +158,8 @@ class BacktestConfig:
     benchmark_symbol: BenchmarkType | str | None = BenchmarkType.KOSPI200
     benchmark_path: Path | str = field(default_factory=_default_benchmark_path)
     allow_partial_buckets: bool = False
+    sector_neutral: bool = False
+    sector_path: Path | str = field(default_factory=_default_sector_path)
     portfolio_grouping: PortfolioGroupingStrategy | None = None
 
     portfolio_weighting: PortfolioWeights | str = PortfolioWeights.EQUAL
@@ -193,6 +200,7 @@ class BacktestConfig:
         bench_type = BenchmarkType.parse(self.benchmark_symbol)
         object.__setattr__(self, "benchmark_symbol", bench_type)
         object.__setattr__(self, "benchmark_path", self._to_project_path(self.benchmark_path))
+        object.__setattr__(self, "sector_path", self._to_project_path(self.sector_path))
 
         self._validate_numeric_fields()
 
@@ -226,11 +234,24 @@ class BacktestConfig:
     def grouping_strategy(self) -> PortfolioGroupingStrategy:
         if self.portfolio_grouping is not None:
             return self.portfolio_grouping
-        return QuantileGroupingStrategy(
+            
+        base_strategy = QuantileGroupingStrategy(
             quantiles=self.quantiles,
             min_assets=self.min_assets,
             allow_partial=self.allow_partial_buckets,
             enabled_quantiles=self.active_quantiles,
+        )
+        
+        if not self.sector_neutral:
+            return base_strategy
+
+        sector_path = Path(self.sector_path)
+        if not sector_path.exists():
+            raise FileNotFoundError(f"Sector data not found at {sector_path} for sector neutral strategy.")
+            
+        return SectorNeutralGroupingStrategy(
+            sector_panel=pd.read_parquet(sector_path),
+            inner_strategy=base_strategy
         )
 
     def with_overrides(self, **updates: Any) -> "BacktestConfig":
