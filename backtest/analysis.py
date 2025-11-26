@@ -6,17 +6,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
+import logging
 import pandas as pd
+
+import matplotlib.pyplot as plt
+import plotly.express as px
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.report import _select_font
+
+font_name = _select_font()
+plt.rcParams["font.family"] = font_name
+plt.rcParams["font.sans-serif"] = [font_name]
+plt.rcParams["axes.unicode_minus"] = False
+
+
 from backtest.portfolio import PositionLedgerEntry, TradeRecord
 from backtest.report import BacktestReport
 from backtest.runner import Backtester
-from backtest.main import run_single_example, run_single_fusion_example
 from backtest.data_sources import BacktestDataset
+from backtest.main import ExampleRunner
+from backtest.config import BenchmarkType
 
 
 @dataclass
@@ -83,31 +96,60 @@ class PortfolioAnalyzer:
         self,
         group_id: str,
         tickers: Iterable[str] | None = None,
+        include_metadata: bool = False,
+        dataset: BacktestDataset | None = None,
     ) -> pd.DataFrame:
         portfolio_report = self.report.groups.get(group_id)
         if portfolio_report is None or not portfolio_report.trades:
             return pd.DataFrame()
         rows: List[dict] = []
         tickers_set = set(str(t) for t in tickers) if tickers is not None else None
+        
+        scores_df = dataset.scores if dataset and include_metadata else None
+        
+        sector_df = None
+        if include_metadata:
+            from backtest.config import _default_sector_path
+            sector_path = _default_sector_path()
+            if sector_path.exists():
+                sector_df = pd.read_parquet(sector_path)
+
         for trade in portfolio_report.trades:
             for pos in trade.positions:
                 if tickers_set is not None and pos.ticker not in tickers_set:
                     continue
-                rows.append(
-                    {
-                        "group_id": group_id,
-                        "enter_date": trade.enter_date,
-                        "exit_date": trade.exit_date,
-                        "ticker": pos.ticker,
-                        "quantity": pos.quantity,
-                        "entry_price": pos.entry_price,
-                        "exit_price": pos.exit_price,
-                        "entry_value": pos.entry_value,
-                        "exit_value": pos.exit_value,
-                        "period_return": trade.period_return,
-                        "note": trade.note,
-                    }
-                )
+                
+                row = {
+                    "group_id": group_id,
+                    "enter_date": trade.enter_date,
+                    "exit_date": trade.exit_date,
+                    "ticker": pos.ticker,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.entry_price,
+                    "exit_price": pos.exit_price,
+                    "entry_value": pos.entry_value,
+                    "exit_value": pos.exit_value,
+                    "period_return": trade.period_return,
+                    "note": trade.note,
+                }
+                
+                if include_metadata:
+                    if scores_df is not None:
+                        try:
+                            if trade.enter_date in scores_df.index and pos.ticker in scores_df.columns:
+                                row["score"] = scores_df.loc[trade.enter_date, pos.ticker]
+                        except Exception:
+                            pass
+                    
+                    if sector_df is not None:
+                        try:
+                            if trade.enter_date in sector_df.index and pos.ticker in sector_df.columns:
+                                row["sector"] = sector_df.loc[trade.enter_date, pos.ticker]
+                        except Exception:
+                            pass
+                            
+                rows.append(row)
+                
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
@@ -329,8 +371,8 @@ class BacktestAnalyzer:
     def latest_long_tickers(self, group_id: str, *, min_weight: float = 0.0) -> List[str]:
         return self.portfolio.latest_long_tickers(group_id, min_weight=min_weight)
 
-    def position_history(self, group_id: str, tickers: Iterable[str] | None = None) -> pd.DataFrame:
-        return self.portfolio.position_history(group_id, tickers)
+    def position_history(self, group_id: str, tickers: Iterable[str] | None = None, include_metadata: bool = False) -> pd.DataFrame:
+        return self.portfolio.position_history(group_id, tickers, include_metadata=include_metadata, dataset=self.dataset)
 
     def get_price_history(self, tickers: Sequence[str] | None = None, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
         return self.market.get_price_history(tickers, start_date, end_date)
@@ -350,23 +392,65 @@ class BacktestAnalyzer:
     def verify_trade_execution(self, group_id: str, tolerance: float = 1e-6) -> pd.DataFrame:
         return self.verification.verify_trade_execution(group_id, tolerance)
 
+    def get_sector_weights(self, group_id: str, value_field: str = "entry_value") -> pd.DataFrame:
+        hist = self.position_history(group_id, include_metadata=True)
+        if hist.empty or "sector" not in hist.columns or value_field not in hist.columns:
+            return pd.DataFrame()
+        grouped = (
+            hist.groupby(["enter_date", "sector"])[value_field]
+            .sum()
+            .reset_index()
+            .rename(columns={value_field: "value"})
+        )
+        totals = grouped.groupby("enter_date")["value"].transform("sum")
+        grouped["weight"] = grouped["value"] / totals
+        pivot = grouped.pivot(index="enter_date", columns="sector", values="weight").fillna(0.0)
+        pivot.index = pd.to_datetime(pivot.index)
+        return pivot.sort_index()
 
-if __name__ == "__main__":
-    tester = run_single_example(
-        input_days=20,
-        return_days=20,
-        rebalance_frequency="M",
-        apply_trading_costs=False,
-        entry_lag=0
+    def plot_sector_weights(self, group_id: str, value_field: str = "entry_value"):
+        data = self.get_sector_weights(group_id, value_field=value_field)
+        if data.empty:
+            print("No sector data available for plotting.")
+            return None
+        long_df = data.reset_index().melt(id_vars="enter_date", var_name="sector", value_name="weight")
+        fig = px.area(
+            long_df,
+            x="enter_date",
+            y="weight",
+            color="sector",
+            title=f"Sector weights over time ({group_id})",
+        )
+        fig.update_layout(legend=dict(orientation="h", y=-0.2), yaxis_range=[0, 1])
+        return fig
+
+
+def analyze(example_name: str = "transformer_lp_sector_neutral") -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    runner = ExampleRunner(
+        base_opts=dict(
+            rebalance_frequency="M",
+            portfolio_weighting="eq",
+            apply_trading_costs=False,
+            buy_cost_bps=2.0,
+            sell_cost_bps=2.0,
+            tax_bps=15.0,
+            entry_lag=0,
+            entry_price_mode="close",
+            benchmark_symbol=BenchmarkType.KOSPI200EQ,
+            start_date="2012-01-31",
+        )
     )
+    tester = runner.run_named(example_name)
     analyzer = BacktestAnalyzer.from_tester(tester)
-    
-    # NOTE: Quantile 5
-    # NOTE: 1. Portfolio Analysis
-    # NOTE: 2. Performance Analysis
-    # NOTE: 3. Verification
+
+    if not analyzer.group_ids:
+        print("No groups available in report.")
+        return
+
     group = analyzer.group_ids[-1]
-    
+
     snapshot = analyzer.portfolio.latest_snapshot(group)
     if snapshot is None:
         print("No positions available.")
@@ -374,13 +458,13 @@ if __name__ == "__main__":
         print(f"Latest portfolio snapshot for group '{group}'")
         print(f"Enter: {snapshot.enter_date}, Exit: {snapshot.exit_date}")
         print(snapshot.positions.to_string(index=False))
-    
+
     print("\nSummary Statistics:")
     print(analyzer.performance.get_summary_stats())
-    
+
     print("\nMonthly Returns (Top Quantile):")
     print(analyzer.performance.get_monthly_returns(group))
-    
+
     print("\nVerifying trade execution...")
     discrepancies = analyzer.verification.verify_trade_execution(group)
     if discrepancies.empty:
@@ -388,3 +472,13 @@ if __name__ == "__main__":
     else:
         print(f"Found {len(discrepancies)} discrepancies:")
         print(discrepancies.head())
+
+    print("\nPlotting sector weights...")
+    fig = analyzer.plot_sector_weights(group)
+    if fig is None:
+        return
+    fig.write_html("sector_weights.html", auto_open=True)
+
+
+if __name__ == "__main__":
+    analyze("transformer_long_sector_neutral")

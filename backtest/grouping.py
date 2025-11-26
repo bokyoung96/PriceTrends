@@ -106,3 +106,78 @@ class ExplicitGroupingStrategy(PortfolioGroupingStrategy):
             tickers = selector(clean_scores)
             selections[identifier] = tuple(str(t) for t in tickers)
         return PortfolioAllocationResult(selections=selections, total_assets=len(clean_scores))
+
+
+class SectorNeutralGroupingStrategy(PortfolioGroupingStrategy):
+    def __init__(
+        self,
+        sector_panel: pd.DataFrame,
+        inner_strategy: PortfolioGroupingStrategy,
+    ) -> None:
+        self.sector_panel = sector_panel
+        self.inner_strategy = inner_strategy
+
+    def groups(self) -> Sequence[PortfolioGroupDefinition]:
+        return self.inner_strategy.groups()
+
+    def allocate(self, scores: pd.Series) -> PortfolioAllocationResult:
+        date = scores.name
+        if not isinstance(date, pd.Timestamp):
+            return PortfolioAllocationResult(
+                selections={g.identifier: tuple() for g in self.groups()},
+                total_assets=0,
+                skipped=True,
+                message="Cannot determine date from scores Series to look up sectors.",
+            )
+
+        try:
+            if date in self.sector_panel.index:
+                sector_map = self.sector_panel.loc[date]
+            else:
+                idx = self.sector_panel.index.searchsorted(date, side='right') - 1
+                if idx < 0:
+                    return PortfolioAllocationResult(
+                        selections={g.identifier: tuple() for g in self.groups()},
+                        total_assets=0,
+                        skipped=True,
+                        message=f"No sector data available before {date}.",
+                    )
+                sector_map = self.sector_panel.iloc[idx]
+        except Exception as e:
+             return PortfolioAllocationResult(
+                selections={g.identifier: tuple() for g in self.groups()},
+                total_assets=0,
+                skipped=True,
+                message=f"Error looking up sector data: {e}",
+            )
+
+        valid_tickers = scores.index.intersection(sector_map.index)
+        if valid_tickers.empty:
+            return PortfolioAllocationResult(
+                selections={g.identifier: tuple() for g in self.groups()},
+                total_assets=0,
+                skipped=True,
+                message="No tickers found in sector map.",
+            )
+
+        aggregated_selections: Dict[str, list[str]] = {g.identifier: [] for g in self.groups()}
+        total_assets = 0
+        active_sectors = sector_map.loc[valid_tickers]
+        
+        for sector, sector_tickers in active_sectors.groupby(active_sectors):
+            sector_scores = scores.loc[sector_tickers.index]
+            sector_result = self.inner_strategy.allocate(sector_scores)
+            
+            if not sector_result.skipped:
+                for group_id, tickers in sector_result.selections.items():
+                    aggregated_selections[group_id].extend(tickers)
+                total_assets += sector_result.total_assets
+
+        final_selections = {k: tuple(v) for k, v in aggregated_selections.items()}
+        
+        return PortfolioAllocationResult(
+            selections=final_selections,
+            total_assets=total_assets,
+            skipped=total_assets == 0,
+            message=None if total_assets > 0 else "No assets allocated across sectors.",
+        )

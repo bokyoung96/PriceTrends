@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
+from matplotlib import font_manager as fm
 import numpy as np
 import pandas as pd
 from matplotlib import patheffects, ticker
@@ -20,6 +21,18 @@ if str(ROOT) not in sys.path:
 
 from backtest.config import BacktestConfig
 from backtest.portfolio import TradeRecord
+
+
+def _select_font() -> str:
+    candidates = ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"]
+    for name in candidates:
+        try:
+            path = fm.findfont(name, fallback_to_default=False)
+            if path:
+                return name
+        except Exception:
+            continue
+    return "DejaVu Sans"
 
 
 @dataclass(frozen=True)
@@ -91,9 +104,11 @@ class BacktestReport:
         summary = self.summary_table()
         bench = self._benchmark_series(equity.index)
 
+        font_name = _select_font()
         plt.rcParams.update(
             {
-                "font.family": "Helvetica Neue",
+                "font.family": font_name,
+                "font.sans-serif": [font_name],
                 "axes.titleweight": "semibold",
                 "axes.labelcolor": "#1C1C1E",
                 "axes.facecolor": "#FFFFFF",

@@ -17,3 +17,7 @@ Until one of those structural changes is made, keeping `num_workers=0` is the sa
 - In `transformer/pipeline.py` the `WindowMaker.make()` preallocates `estimated_windows` as a memmap but then calls `np.array(...).copy()` to RAM; with `lookback=252` this copy balloons to hundreds of MB/GB before any GPU upload.
 - The RAM spike (GPU 0%) happens before training starts; the bottleneck is the full window materialization, not I/O speed. Larger `lookback` simply multiplies `estimated_windows × lookback × features`.
 - Safe fixes (no behavior change): avoid the final full copy (use the memmap directly or stream batches), or two-pass sizing to allocate the exact window count instead of the worst-case estimate. Cleaning up the temp memmap file after use remains important.
+
+## Sector neutrality gaps (WICS26, KOSPI200)
+- With `sector_neutral=True` and WICS26 on KOSPI200, some sectors (e.g., Semiconductors with only 3 names) fall below `min_assets` and are skipped, leaving no allocation for that sector.
+- To avoid missing sectors, switch sector data to GICS (finer coverage and larger counts per bucket) or lower `min_assets` only for ultra-thin sectors. The former is preferred to keep the neutralization meaningful.
