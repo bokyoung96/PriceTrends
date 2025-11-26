@@ -83,7 +83,7 @@ def _transformer_scores_lp(mode: str = "TEST") -> Tuple[Path, ...]:
         transformer_score_path(mode=mode, timeframe="MEDIUM"),
         transformer_score_path(mode=mode, timeframe="LONG"),
         transformer_score_path(mode=mode, name="transformer_test_medium_lp_126"),
-        # transformer_score_path(mode=mode, name="transformer_test_medium_lp_252"),
+        transformer_score_path(mode=mode, name="transformer_test_medium_lp_252"),
     )
 
 

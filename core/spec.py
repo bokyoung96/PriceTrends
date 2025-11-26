@@ -35,6 +35,7 @@ class MarketMetric(Enum):
     FOREIGN = "FOREIGN"
     TRANS_BAN = "TRANS_BAN"
     BM = "BM"
+    SECTOR = "SECTOR"
 
     @property
     def source_filename(self) -> str:
@@ -256,7 +257,8 @@ if __name__ == "__main__":
         # "constituent": factory.constituents(market=MarketUniverse.KOSPI200),
         # "metric:mktcap": factory.metric(metric=MarketMetric.MKTCAP),
         # "metric:trans_ban": factory.metric(metric=MarketMetric.TRANS_BAN),
-        "metric:bm": factory.bm(),
+        # "metric:bm": factory.bm(),
+        "metric:sector": factory.metric(metric=MarketMetric.SECTOR),
         # "metric:foreign": factory.metrics(),
     }
     for label, spec in examples.items():
