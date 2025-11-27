@@ -141,6 +141,25 @@ class EntryPriceMode(str, Enum):
         raise ValueError(f"Unknown entry price mode: {raw}")
 
 
+class LongShortMode(str, Enum):
+    OFF = "off"
+    LEGS = "legs"
+    NET = "net"
+
+    @classmethod
+    def parse(cls, raw: "LongShortMode | str") -> "LongShortMode":
+        if isinstance(raw, LongShortMode):
+            return raw
+        normalized = str(raw).strip().lower()
+        if normalized in {"off", "none"}:
+            return cls.OFF
+        if normalized in {"legs", "separate", "separate_legs"}:
+            return cls.LEGS
+        if normalized in {"net", "combined"}:
+            return cls.NET
+        raise ValueError(f"Unknown long-short mode: {raw}")
+
+
 @dataclass(frozen=True)
 class BacktestConfig:
     scores_path: Path | Sequence[Path] = field(default_factory=_default_scores_path)
@@ -161,6 +180,7 @@ class BacktestConfig:
     sector_neutral: bool = False
     sector_path: Path | str = field(default_factory=_default_sector_path)
     portfolio_grouping: PortfolioGroupingStrategy | None = None
+    label_prefix: str | None = None
 
     portfolio_weighting: PortfolioWeights | str = PortfolioWeights.EQUAL
     weight_data_path: Path | str | None = field(default_factory=_default_weight_data_path)
@@ -176,6 +196,9 @@ class BacktestConfig:
     tax_bps: float = 0.0
     entry_lag: int = 0
     show_progress: bool = True
+    long_short_mode: LongShortMode | str = LongShortMode.OFF
+    short_quantiles: Sequence[int] | None = None
+    dollar_neutral_net: bool = True
 
     start_date: str | pd.Timestamp | None = None
     end_date: str | pd.Timestamp | None = None
@@ -208,6 +231,11 @@ class BacktestConfig:
             object.__setattr__(self, "start_date", pd.Timestamp(self.start_date))
         if self.end_date is not None:
             object.__setattr__(self, "end_date", pd.Timestamp(self.end_date))
+        if self.short_quantiles is not None:
+            object.__setattr__(self, "short_quantiles", tuple(int(q) for q in self.short_quantiles))
+        ls_mode = LongShortMode.parse(self.long_short_mode)
+        object.__setattr__(self, "long_short_mode", ls_mode)
+        object.__setattr__(self, "dollar_neutral_net", bool(self.dollar_neutral_net))
 
     def _to_project_path(self, raw: Path | str) -> Path:
         path = Path(raw)

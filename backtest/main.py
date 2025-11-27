@@ -36,6 +36,8 @@ class ExampleSpec:
     log_summary: bool = True
     save_report: bool = True
     sector_neutral: bool = False
+    output_filename: str | None = None
+    label_prefix: str | None = None
 
 
 class ExampleRunner:
@@ -48,13 +50,15 @@ class ExampleRunner:
         cfg_kwargs.update(spec.overrides)
         cfg_kwargs["scores_path"] = spec.scores
         cfg_kwargs["sector_neutral"] = spec.sector_neutral
+        if spec.label_prefix:
+            cfg_kwargs["label_prefix"] = spec.label_prefix
         cfg = _build_config(**cfg_kwargs)
         tester = Backtester(cfg)
         report = tester.run(group_selector=spec.group_selector)
         if spec.log_summary:
             logger.info("%s summary:\n%s", spec.name, report.summary_table())
         if spec.save_report:
-            output_path = report.save()
+            output_path = report.save(filename=spec.output_filename)
             logger.info("Saved %s report to %s", spec.name, output_path)
         self.latest = tester
         return tester
@@ -125,12 +129,33 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         scores=_cnn_scores() + _transformer_scores_default() + _transformer_scores_lp(),
         group_selector="q5",
     ),
-    "transformer_long_sector_neutral": ExampleSpec(
-        name="transformer_lp_sector_neutral",
+    "transformer_long_short": ExampleSpec(
+        name="transformer_long_short",
         scores=_transformer_scores_default(),
-        group_selector="q5",
+        group_selector=("q1", "q5", "net"),
+        overrides={
+            "active_quantiles": (0, 4),
+            "long_short_mode": "net",
+            "short_quantiles": (0,),
+            "label_prefix": "long_short",
+            "dollar_neutral_net": True,
+        },
+        output_filename="backtest_long_short.png",
+    ),
+    "transformer_long_short_sector_neutral": ExampleSpec(
+        name="transformer_long_short_sector_neutral",
+        scores=(transformer_score_path(mode="TEST", timeframe="LONG"),),
+        group_selector=("q1", "q5", "net"),
         sector_neutral=True,
-        overrides={"min_assets": 5},
+        overrides={
+            "active_quantiles": (0, 4),
+            "long_short_mode": "net",
+            "short_quantiles": (0,),
+            "min_assets": 5,
+            "label_prefix": "long_short_sn",
+            "dollar_neutral_net": True,
+        },
+        output_filename="backtest_long_short_sn.png",
     ),
 }
 
@@ -183,5 +208,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    examples = ("transformer_long_sector_neutral",)
+    examples = ("transformer_long_short",)
     main(examples)

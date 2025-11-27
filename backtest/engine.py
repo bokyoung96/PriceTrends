@@ -17,7 +17,8 @@ from backtest.config import BacktestConfig, PortfolioWeights, EntryPriceMode
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataset
 from backtest.grouping import PortfolioGroupingStrategy
-from backtest.portfolio import PortfolioTrack
+from backtest.portfolio import PortfolioTrack, PositionSide
+from backtest.config import LongShortMode
 from backtest.report import BacktestReport, PortfolioReport
 
 
@@ -66,7 +67,7 @@ class RebalancePlanner:
     def _build_schedule(self) -> list[pd.Timestamp]:
         series = pd.Series(index=self._dates, data=self._dates)
         grouped = series.resample(self.frequency).first().dropna()
-        # Use resample labels (e.g. month-end, week-end) as signal dates
+        # NOTE: Use resample labels (e.g. month-end, week-end) as signal dates
         schedule = [pd.Timestamp(ts) for ts in grouped.index]
         last_date = self._dates[-1]
         if not schedule or schedule[-1] != last_date:
@@ -94,7 +95,6 @@ class RebalancePlanner:
         try:
             loc = self._dates.get_loc(signal)
         except KeyError:
-            # Fallback: last available trading day on or before the signal date
             loc = int(self._dates.searchsorted(signal, side="right")) - 1
         if isinstance(loc, slice):
             loc = loc.start
@@ -207,6 +207,8 @@ class BacktestEngine:
         self.weighting = config.portfolio_weighting
         self._calculator = PerformanceCalculator(config.rebalance_frequency)
         self._validate_weight_support()
+        self._short_groups = self._short_group_ids()
+        self._group_sides: dict[str, PositionSide] = {}
 
     def run(self) -> BacktestReport:
         timeline = self._build_timeline()
@@ -217,9 +219,11 @@ class BacktestEngine:
                 group_id=group.identifier,
                 starting_capital=self.config.initial_capital,
                 cost_model=self.cost_model,
+                side=self._group_side(group.identifier),
             )
             for group in groups
         }
+        self._group_sides = {gid: portfolio.side for gid, portfolio in portfolios.items()}
         for portfolio in portfolios.values():
             portfolio.mark_initial(timeline.anchor)
 
@@ -240,6 +244,7 @@ class BacktestEngine:
                 )
 
         reports = {gid: self._build_group_report(portfolio) for gid, portfolio in portfolios.items()}
+        self._add_net_report(reports, label_map)
         bench_equity = self._benchmark_equity_series()
         return BacktestReport(config=self.config, groups=reports, bench_equity=bench_equity, labels=label_map)
 
@@ -308,12 +313,6 @@ class BacktestEngine:
             try:
                 entry_prices = self.dataset.open_prices.loc[effective_date]
             except KeyError:
-                # Fallback: try to find the closest open price on or after the effective date
-                # Since we are looking for 'next open', it should ideally be exact.
-                # But if missing, we might look forward slightly or error.
-                # Here we stick to strict or simple fallback.
-                # Let's try to find valid open prices within the window if exact match fails.
-                # For now, strict:
                 raise KeyError(f"Missing open prices for entry date {effective_date}")
 
         return WindowPayload(
@@ -361,6 +360,16 @@ class BacktestEngine:
         if self.weighting.requires_market_caps and getattr(self.dataset, "weights", None) is None:
             raise ValueError("Market-cap weighting requested but dataset does not supply weights.")
 
+    def _short_group_ids(self) -> set[str]:
+        if self.config.long_short_mode is LongShortMode.OFF:
+            return set()
+        if not self.config.short_quantiles:
+            return {"q1"}
+        return {f"q{int(idx) + 1}" for idx in self.config.short_quantiles}
+
+    def _group_side(self, group_id: str) -> PositionSide:
+        return PositionSide.SHORT if group_id.lower() in self._short_groups else PositionSide.LONG
+
     def _rebalance_offset(self):
         freq = self.config.rebalance_frequency.upper()
         offsets = {
@@ -370,3 +379,60 @@ class BacktestEngine:
             "QE": pd.offsets.QuarterEnd(),
         }
         return offsets.get(freq, freq)
+
+    def _add_net_report(self, reports: dict[str, PortfolioReport], labels: dict[str, str]) -> None:
+        if self.config.long_short_mode is not LongShortMode.NET:
+            return
+        longs = [gid for gid, side in self._group_sides.items() if side is PositionSide.LONG and gid in reports]
+        shorts = [gid for gid, side in self._group_sides.items() if side is PositionSide.SHORT and gid in reports]
+        if not longs or not shorts:
+            return
+        base = float(self.config.initial_capital)
+        if base <= 0:
+            return
+        if not longs or not shorts:
+            return
+        long_id = longs[0]
+        short_id = shorts[0]
+        long_eq = reports[long_id].equity_curve
+        short_eq = reports[short_id].equity_curve
+        all_dates = pd.Index(sorted(set(long_eq.index) | set(short_eq.index)))
+        long_eq = long_eq.reindex(all_dates).ffill()
+        short_eq = short_eq.reindex(all_dates).ffill()
+
+        rebalance_dates = sorted(
+            set(trade.enter_date for trade in reports[long_id].trades)
+            | set(trade.enter_date for trade in reports[short_id].trades)
+        )
+        if not rebalance_dates:
+            rebalance_dates = [all_dates[0]]
+        segments = rebalance_dates + [all_dates[-1]]
+
+        net_returns_parts: list[pd.Series] = []
+        for start, end in zip(segments[:-1], segments[1:]):
+            mask = (all_dates >= start) & (all_dates <= end)
+            segment_idx = all_dates[mask]
+            if segment_idx.empty:
+                continue
+            gross = (long_eq.loc[start] + short_eq.loc[start])
+            if gross == 0:
+                continue
+            pnl = (long_eq.loc[segment_idx] - long_eq.loc[segment_idx].shift()).fillna(0.0) + (
+                short_eq.loc[segment_idx] - short_eq.loc[segment_idx].shift()
+            ).fillna(0.0)
+            ret = (pnl / gross).fillna(0.0)
+            net_returns_parts.append(ret)
+
+        if not net_returns_parts:
+            return
+        net_returns = pd.concat(net_returns_parts).sort_index()
+        net_equity = base * (1.0 + net_returns).cumprod()
+        stats = self._calculator.summarize(net_equity, net_returns)
+        reports["net"] = PortfolioReport(
+            group_id="net",
+            equity_curve=net_equity,
+            period_returns=net_returns,
+            trades=tuple(),
+            stats=stats,
+        )
+        labels["net"] = "net"
