@@ -6,12 +6,26 @@ from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import pandas as pd
+from enum import Enum
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtest.costs import ExecutionCostModel
+
+
+class PositionSide(str, Enum):
+    LONG = "long"
+    SHORT = "short"
+
+    @property
+    def is_short(self) -> bool:
+        return self is PositionSide.SHORT
+
+    @property
+    def is_long(self) -> bool:
+        return self is PositionSide.LONG
 
 
 @dataclass(frozen=True)
@@ -37,8 +51,6 @@ class TradeRecord:
 
 
 class PortfolioTrack:
-    """Tracks the evolution of capital allocated to a single portfolio group."""
-
     def __init__(
         self,
         group_id: str,
@@ -47,12 +59,14 @@ class PortfolioTrack:
         *,
         min_price_relative: float = 0.05,
         max_price_relative: float = 20.0,
+        side: PositionSide = PositionSide.LONG,
     ) -> None:
         self.group_id = str(group_id)
         self.capital = starting_capital
         self.cost_model = cost_model or ExecutionCostModel.disabled()
         self.min_price_relative = float(min_price_relative)
         self.max_price_relative = float(max_price_relative)
+        self.side = side
         self._equity: Dict[pd.Timestamp, float] = {}
         self._period_returns: Dict[pd.Timestamp, float] = {}
         self.trades: List[TradeRecord] = []
@@ -131,7 +145,11 @@ class PortfolioTrack:
             )
             return
 
-        gross_exit = float((exits.reindex(index=quantities.index) * quantities).sum())
+        if self.side.is_short:
+            pnl = float(((entries.reindex(index=quantities.index) - exits.reindex(index=quantities.index)) * quantities).sum())
+            gross_exit = capital_in + pnl
+        else:
+            gross_exit = float((exits.reindex(index=quantities.index) * quantities).sum())
         tradable_fraction = 0.0 if len(entries) == 0 else (len(entries) - len(halted)) / len(entries)
         capital_out = self.cost_model.net_exit_capital(gross_exit, tradable_fraction=tradable_fraction)
 
@@ -276,12 +294,19 @@ class PortfolioTrack:
         working = working.ffill().dropna(how="all")
         if working.empty:
             return None
-        values = working.mul(quantities, axis=1)
-        equity = values.sum(axis=1)
-        if not equity.empty:
+        if self.side.is_short:
             if entry_prices is None:
-                equity.iloc[0] = investable
-            equity.iloc[-1] = exit_capital
+                return None
+            entries = pd.Series(entry_prices).reindex(quantities.index).ffill().bfill()
+            pnl_series = (entries - working).mul(quantities, axis=1)
+            equity = investable + pnl_series.sum(axis=1)
+        else:
+            values = working.mul(quantities, axis=1)
+            equity = values.sum(axis=1)
+        if equity.empty:
+            return None
+        equity.iloc[0] = investable
+        equity.iloc[-1] = exit_capital
         return equity
 
     def _normalize_weights(self, tickers: Sequence[str], weights: pd.Series | None) -> pd.Series | None:
@@ -324,14 +349,20 @@ class PortfolioTrack:
             exit_price = float(exits.get(ticker, entry_price))
             ticker_id = str(ticker)
             quantities[ticker_id] = float(qty)
+            if self.side.is_short:
+                exit_value = float(capital + (float(entry_price) - exit_price) * qty)
+                entry_value = float(capital)
+            else:
+                exit_value = float(exit_price * qty)
+                entry_value = float(entry_price * qty)
             ledger_entries.append(
                 PositionLedgerEntry(
                     ticker=ticker_id,
-                    quantity=float(qty),
+                    quantity=float(qty if self.side.is_long else -qty),
                     entry_price=float(entry_price),
                     exit_price=exit_price,
-                    entry_value=float(entry_price * qty),
-                    exit_value=float(exit_price * qty),
+                    entry_value=entry_value,
+                    exit_value=exit_value,
                 )
             )
         return pd.Series(quantities, dtype=float), tuple(ledger_entries)

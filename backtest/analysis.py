@@ -17,19 +17,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtest.report import _select_font
-
-font_name = _select_font()
-plt.rcParams["font.family"] = font_name
-plt.rcParams["font.sans-serif"] = [font_name]
-plt.rcParams["axes.unicode_minus"] = False
-
-
 from backtest.portfolio import PositionLedgerEntry, TradeRecord
 from backtest.report import BacktestReport
 from backtest.runner import Backtester
 from backtest.data_sources import BacktestDataset
 from backtest.main import ExampleRunner
 from backtest.config import BenchmarkType
+
+font_name = _select_font()
+plt.rcParams["font.family"] = font_name
+plt.rcParams["font.sans-serif"] = [font_name]
+plt.rcParams["axes.unicode_minus"] = False
 
 
 @dataclass
@@ -342,9 +340,10 @@ class TradeVerifier:
 
 
 class BacktestAnalyzer:
-    def __init__(self, report: BacktestReport, dataset: BacktestDataset | None = None) -> None:
+    def __init__(self, report: BacktestReport, dataset: BacktestDataset | None = None, tester: Backtester | None = None) -> None:
         self.report = report
         self.dataset = dataset
+        self.tester = tester
         
         self.portfolio = PortfolioAnalyzer(report)
         self.market = MarketAnalyzer(dataset)
@@ -356,7 +355,7 @@ class BacktestAnalyzer:
         dataset = None
         if tester._jobs and tester._jobs[0].dataset:
             dataset = tester._jobs[0].dataset
-        return cls(tester.latest_report(), dataset)
+        return cls(tester.latest_report(), dataset, tester=tester)
 
     @property
     def group_ids(self) -> List[str]:
@@ -425,25 +424,11 @@ class BacktestAnalyzer:
         return fig
 
 
-def analyze(example_name: str = "transformer_lp_sector_neutral") -> None:
+def analyze(example_name: str = "transformer_long_short"):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    runner = ExampleRunner(
-        base_opts=dict(
-            rebalance_frequency="M",
-            portfolio_weighting="eq",
-            apply_trading_costs=False,
-            buy_cost_bps=2.0,
-            sell_cost_bps=2.0,
-            tax_bps=15.0,
-            entry_lag=0,
-            entry_price_mode="close",
-            benchmark_symbol=BenchmarkType.KOSPI200EQ,
-            start_date="2012-01-31",
-        )
-    )
-    tester = runner.run_named(example_name)
-    analyzer = BacktestAnalyzer.from_tester(tester)
+    runner = _build_runner()
+    analyzer = BacktestAnalyzer.from_tester(runner.run_named(example_name))
 
     if not analyzer.group_ids:
         print("No groups available in report.")
@@ -476,9 +461,26 @@ def analyze(example_name: str = "transformer_lp_sector_neutral") -> None:
     print("\nPlotting sector weights...")
     fig = analyzer.plot_sector_weights(group)
     if fig is None:
-        return
+        return analyzer
     fig.write_html("sector_weights.html", auto_open=True)
+    return analyzer
+
+
+def _build_runner() -> ExampleRunner:
+    base_opts = dict(
+        rebalance_frequency="M",
+        portfolio_weighting="eq",
+        apply_trading_costs=False,
+        buy_cost_bps=2.0,
+        sell_cost_bps=2.0,
+        tax_bps=15.0,
+        entry_lag=0,
+        entry_price_mode="close",
+        benchmark_symbol=BenchmarkType.KOSPI200EQ,
+        start_date="2012-01-31",
+    )
+    return ExampleRunner(base_opts=base_opts)
 
 
 if __name__ == "__main__":
-    analyze("transformer_long_sector_neutral")
+    analyzer = analyze("transformer_long_short")

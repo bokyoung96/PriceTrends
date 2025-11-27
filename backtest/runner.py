@@ -276,6 +276,36 @@ class Backtester:
                 matrices["benchmark"] = bench_matrix
 
         return pd.concat(matrices, axis=0) if matrices else None
+
+    @property
+    def weights(self) -> pd.DataFrame:
+        report = self.latest_report()
+        frames: dict[str, pd.DataFrame] = {}
+        for group_id, group_report in report.groups.items():
+            rows: list[dict[str, object]] = []
+            for trade in group_report.trades:
+                if trade.capital_in <= 0:
+                    continue
+                for pos in trade.positions:
+                    sign = -1.0 if pos.quantity < 0 else 1.0
+                    weight = 0.0 if trade.capital_in == 0 else (pos.entry_value / trade.capital_in) * sign
+                    rows.append(
+                        {
+                            "enter_date": trade.enter_date,
+                            "ticker": pos.ticker,
+                            "weight": weight,
+                        }
+                    )
+            if not rows:
+                continue
+            df = pd.DataFrame(rows)
+            pivot = df.pivot(index="enter_date", columns="ticker", values="weight").fillna(0.0)
+            frames[group_id] = pivot
+        if not frames:
+            return pd.DataFrame()
+        if len(frames) == 1:
+            return next(iter(frames.values()))
+        return pd.concat(frames, axis=1, names=["group_id", "ticker"]).sort_index()
     def daily_pnl_df(self) -> pd.DataFrame:
         return self.latest_report().daily_pnl_frame()
 
@@ -318,7 +348,10 @@ class Backtester:
         score_payload = scores
         price_payload = prices
         for path in paths:
-            label = _label_from_path(path)
+            if config.label_prefix:
+                label = f"{config.label_prefix}_{len(jobs)}"
+            else:
+                label = _label_from_path(path)
             job_config = config.with_overrides(scores_path=path)
             jobs.append(
                 BacktestJob(
