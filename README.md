@@ -1,115 +1,76 @@
 # PriceTrends
 
-## 📈 Overview
-
-PriceTrends is a research framework for **stock‑price trend prediction**. It integrates deep learning models (CNN, Transformer) with a robust backtesting engine to evaluate trading strategies based on predicted trends.
-
-The framework consists of three main pillars:
-1.  **CNN Pipeline** (`core/` & `prediction/`) – Converts OHLCV data into chart images and trains a Convolutional Neural Network.
-2.  **Transformer Pipeline** (`transformer/`) – Processes raw time‑series data using a custom Transformer with Variable Selection Network.
-3.  **Backtest Engine** (`backtest/`) – A flexible, event-driven backtester for validating strategies, supporting various weighting schemes, transaction costs, and benchmarking.
+Research framework for stock price trend prediction with CNN/Transformer models and a flexible backtesting engine.
 
 ---
 
-## 🛠️ Modules
+## Overview
+- **CNN pipeline** (`core/`, `prediction/`): OHLCV → chart images → CNN scoring.
+- **Transformer pipeline** (`transformer/`): Raw time-series features + custom Transformer/VSN, multiple timeframes (SHORT/MEDIUM/LONG).
+- **Backtest engine** (`backtest/`): Event-driven simulator with costs, benchmarks, grouping/quantiles, and reporting.
 
+---
+
+## Modules
 | Module | Description |
-| :--- | :--- |
-| `core/` | Data loading, preprocessing, and CNN model definitions. |
-| `prediction/` | Image generation for CNN, model evaluation, and scoring. |
-| `transformer/` | End‑to‑end Transformer model, feature engineering, and training scripts. |
-| `backtest/` | **[NEW]** Comprehensive backtesting engine (Portfolio, Engine, Reporting). |
-| `daily/` | Scripts for daily operational tasks and orchestration. |
-| `utils/` | Helper utilities for path management and visualization. |
+| --- | --- |
+| `core/` | Data loading/preprocessing and CNN model definitions. |
+| `prediction/` | Image generation, CNN evaluation, and scoring. |
+| `transformer/` | Transformer model, feature engineering, training scripts. |
+| `backtest/` | Portfolio engine, grouping, reporting, and examples. |
+| `daily/` | Daily operational scripts. |
+| `utils/` | Path helpers and misc utilities. |
 
 ---
 
-## 🚀 Key Features
+## Key Features
+- **Transformer pipeline**: memmap windowing for large lookbacks; `config.json` separates `mode` (TEST/PRODUCTION) and `timeframe` (SHORT/MEDIUM/LONG).
+- **Backtesting**: quantile grouping, entry lag, trading costs/tax, sector-neutral option, long/short (legs + net), benchmark support.
+- **Reporting**: equity/drawdown, summary stats, monthly returns, and saved PNG/HTML artifacts.
 
-### 1. Transformer Pipeline
--   **Memory‑Efficient**: Uses `numpy.memmap` for window creation, enabling `stride=1` (daily rolling windows) on large datasets without RAM issues.
--   **Flexible Configuration**: `config.json` separates **mode** (`TEST`/`PRODUCTION`) from **timeframe** (`SHORT`/`MEDIUM`/`LONG`), allowing mix-and-match experiments.
--   **Progress Tracking**: Integrated `tqdm` for real-time feedback on data loading and training.
-
-### 2. Backtest Engine
--   **Event-Driven**: Simulates daily rebalancing with realistic constraints (entry lag, transaction costs, taxes).
--   **Multi-Strategy Support**: Compare multiple strategies (e.g., CNN vs. Transformer vs. Ensemble) in a single run.
--   **Rich Reporting**: Generates detailed performance reports including:
-    -   Cumulative Returns & Equity Curves
-    -   Drawdown Analysis
-    -   Monthly Return Heatmaps
-    -   Win Rate & Sharpe Ratio
--   **Validation**: Includes logic to validate backtest assumptions against benchmarks (e.g., KOSPI 200).
+Note: Long/short net is self-financing (leg PnL ÷ gross then compounded); it can differ from simple `(q1+q5)/2` averages due to compounding/period alignment. See `improvements.md` for details.
 
 ---
 
-## 📦 Quick Start
+## Quick Start
+Prerequisites: Python 3.8+, install requirements in a virtualenv/conda env.
 
-### Prerequisites
--   Python 3.8+
--   Dependencies listed in `requirements.txt`
-
-### 1. Data Preparation
-Ensure your OHLCV data (Parquet format) is located in the `DATA/` directory.
-
-### 2. Training a Model (Transformer)
+1) Train Transformer (example)
 ```bash
-# Train a Transformer model with TEST mode and MEDIUM timeframe
 python transformer/train.py
 ```
 
-### 3. Running a Backtest
-The `backtest/main.py` script serves as the entry point for running backtests.
-
+2) Run a backtest (entry point)
 ```bash
-# Run a comprehensive comparison of multiple models
 python backtest/main.py
 ```
-
-You can customize the backtest in `backtest/main.py`:
-```python
-tester = run_comprehensive_comparison_example(
-    input_days=20,
-    return_days=20,
-    rebalance_frequency="M",  # Monthly rebalancing
-    start_date="2012-01-01",
-    # ...
-)
-```
+Tweak `backtest/main.py` examples for scores, rebal freq, costs, long/short mode, etc.
 
 ---
 
-## � Project Structure
-
+## Project Structure
 ```
 PriceTrends/
-├── backtest/            # Backtesting engine & reporting
-│   ├── engine.py        # Core simulation logic
-│   ├── portfolio.py     # Portfolio state management
-│   ├── report.py        # Performance analysis & visualization
-│   └── main.py          # Backtest entry point
-├── core/                # Core data & CNN modules
-├── prediction/          # CNN prediction & scoring
-├── transformer/         # Transformer model & pipeline
-│   ├── model.py         # Network architecture
-│   ├── train.py         # Training script
-│   └── params.py        # Configuration management
-├── daily/               # Daily operation scripts
-├── utils/               # Utility functions
-├── DATA/                # Market data (Parquet)
-├── scores/              # Model prediction scores
-└── results/             # Backtest reports & artifacts
+  backtest/        # Engine, grouping, reporting, examples
+  core/            # CNN data/model
+  prediction/      # CNN scoring
+  transformer/     # Transformer pipeline & training
+  daily/           # Ops scripts
+  utils/           # Helpers
+  DATA/            # Parquet market data
+  scores/          # Model prediction scores
+  results/         # Backtest outputs
 ```
 
 ---
 
-## 📝 Documentation
-
--   **Pipeline Details**: See `pipeline.md` for a deep dive into the data processing and training workflows.
--   **Transformer Docs**: Check `transformer/README.md` for specific details on the Transformer implementation.
+## Documentation
+- Pipeline details: `pipeline.md`
+- Transformer docs: `transformer/README.md`
+- Backtest usage: `backtest/README.md`
+- Notes/known issues: `improvements.md`
 
 ---
 
-## 🎉 Contributing
-
-Feel free to open issues or submit pull requests to improve the framework. Happy trading!
+## Contributing
+Issues/PRs welcome—focus on clear configs, reproducible experiments, and keeping artifacts (scores, reports) organized per module.

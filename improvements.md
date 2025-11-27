@@ -18,6 +18,10 @@ Until one of those structural changes is made, keeping `num_workers=0` is the sa
 - The RAM spike (GPU 0%) happens before training starts; the bottleneck is the full window materialization, not I/O speed. Larger `lookback` simply multiplies `estimated_windows × lookback × features`.
 - Safe fixes (no behavior change): avoid the final full copy (use the memmap directly or stream batches), or two-pass sizing to allocate the exact window count instead of the worst-case estimate. Cleaning up the temp memmap file after use remains important.
 
+## Long-short net calculation nuance (gross 2× vs average of legs)
+- The long/short legs are run separately (1× capital each, total gross 2×). The net line is a self-financing return built from leg PnL/gross; it will not exactly match `(q1+q5)/2` monthly returns because compounding and gross choices differ.
+- Current net: sum of daily PnL from q1/q5, divided by a gross baseline (rebalance-segment gross for legs; net gross was experimented with constant 2×). This yields daily returns that are compounded, so monthly net can differ from the simple monthly average.
+- If you need net to equal the arithmetic average of the legs over a given period, compute net return as the period PnL sum divided by the period-start gross (e.g., `(pnl_q1+pnl_q5)/gross_start`) and compound per period. Mixing daily self-financing and monthly averages will introduce drift; aligning the period and the averaging/remapping step removes the gap.
 ## Sector neutrality gaps (WICS26, KOSPI200)
 - With `sector_neutral=True` and WICS26 on KOSPI200, some sectors (e.g., Semiconductors with only 3 names) fall below `min_assets` and are skipped, leaving no allocation for that sector.
 - To avoid missing sectors, switch sector data to GICS (finer coverage and larger counts per bucket) or lower `min_assets` only for ultra-thin sectors. The former is preferred to keep the neutralization meaningful.
