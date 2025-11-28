@@ -157,6 +157,17 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         },
         output_filename="backtest_long_short_sn.png",
     ),
+    "transformer_medium_multi": ExampleSpec(
+        name="transformer_medium_multi",
+        scores=(transformer_score_path(name="transformer_test_medium_multi"),),
+        group_selector=("q1", "q2", "q3", "q4", "q5"),
+        overrides={
+            "active_quantiles": (0, 1, 2, 3, 4),
+            "label_prefix": "multi",
+            "portfolio_weighting": "eq",
+        },
+        output_filename="backtest_transformer_medium_multi.png",
+    ),
 }
 
 
@@ -208,5 +219,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    examples = ("transformer_long_short_sector_neutral",)
+    examples = ("transformer_medium_multi",)
     main(examples)

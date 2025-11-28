@@ -69,3 +69,8 @@ class TransformerParams:
     @property
     def timeframes(self) -> List[str]:
         return list(self.config['timeframe_configs'].keys())
+
+
+def build_name(mode: str, model_type: str, base: str = "transformer") -> str:
+    suffix = "_multi" if model_type.lower() == "multi" else ""
+    return f"{base}_{mode.lower()}{suffix}"
