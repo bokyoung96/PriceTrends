@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.root import RESULTS_ROOT, SCORES_ROOT
-from transformer.params import TransformerParams
+from transformer.params import TransformerParams, build_name
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,8 @@ class ScoreMaker:
         logger.info(f"Loading results from {path}")
         df = pd.read_parquet(path)
         
-        scores = df.pivot(index="date", columns="asset", values="prob_up").sort_index()
+        col = "score" if "score" in df.columns else "prob_up"
+        scores = df.pivot(index="date", columns="asset", values=col).sort_index()
         return scores
     
     def save(self, df: pd.DataFrame):
@@ -44,7 +45,8 @@ if __name__ == "__main__":
     params = TransformerParams()
     tcfg = params.get_config(mode="TEST", timeframe="MEDIUM")
     
-    name = f"transformer_{tcfg.mode}"
+    model_type = "multi"
+    name = build_name(tcfg.mode, model_type)
     
     maker = ScoreMaker(mode="TEST", name=name)
     scores = maker.run()
