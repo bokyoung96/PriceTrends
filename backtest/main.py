@@ -146,14 +146,14 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         name="transformer_long_short_sector_neutral",
         scores=(transformer_score_path(mode="TEST", timeframe="LONG"),),
         group_selector=("q1", "q5", "net"),
-        sector_neutral=True,
+        sector_neutral=False,
         overrides={
             "active_quantiles": (0, 4),
             "long_short_mode": "net",
             "short_quantiles": (0,),
             "min_assets": 5,
             "label_prefix": "long_short_sn",
-            "dollar_neutral_net": True,
+            "dollar_neutral_net": False,
         },
         output_filename="backtest_long_short_sn.png",
     ),
@@ -208,5 +208,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    examples = ("transformer_long_short",)
+    examples = ("transformer_long_short_sector_neutral",)
     main(examples)

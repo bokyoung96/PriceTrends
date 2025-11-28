@@ -390,8 +390,6 @@ class BacktestEngine:
         base = float(self.config.initial_capital)
         if base <= 0:
             return
-        if not longs or not shorts:
-            return
         long_id = longs[0]
         short_id = shorts[0]
         long_eq = reports[long_id].equity_curve
@@ -408,13 +406,14 @@ class BacktestEngine:
             rebalance_dates = [all_dates[0]]
         segments = rebalance_dates + [all_dates[-1]]
 
+        gross_const = base * 2.0
         net_returns_parts: list[pd.Series] = []
         for start, end in zip(segments[:-1], segments[1:]):
             mask = (all_dates >= start) & (all_dates <= end)
             segment_idx = all_dates[mask]
             if segment_idx.empty:
                 continue
-            gross = (long_eq.loc[start] + short_eq.loc[start])
+            gross = (long_eq.loc[start] + short_eq.loc[start]) if self.config.dollar_neutral_net else gross_const
             if gross == 0:
                 continue
             pnl = (long_eq.loc[segment_idx] - long_eq.loc[segment_idx].shift()).fillna(0.0) + (
