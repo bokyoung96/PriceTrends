@@ -81,7 +81,7 @@ def _cnn_scores(input_days: int = 20, return_days: int = 20) -> Tuple[Path, ...]
 def _transformer_scores_default(mode: str = "TEST") -> Tuple[Path, ...]:
     return (
         transformer_score_path(mode=mode, timeframe="MEDIUM"),
-        transformer_score_path(mode=mode, timeframe="LONG"),
+        # transformer_score_path(mode=mode, timeframe="LONG"),
     )
 
 
@@ -186,7 +186,7 @@ EXAMPLES: Dict[str, ExampleSpec] = {
             "portfolio_weighting": "eq",
             "constituent_universe": MarketUniverse.KOSPI200,
             "benchmark_symbol": None,
-            "min_assets": 30,
+            "min_assets": 25,
             "min_score": 0.50,
             "min_assets_per_quantile": True,
         },

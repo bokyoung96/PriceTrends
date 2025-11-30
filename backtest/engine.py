@@ -425,6 +425,8 @@ class BacktestEngine:
         if not net_returns_parts:
             return
         net_returns = pd.concat(net_returns_parts).sort_index()
+        if net_returns.index.has_duplicates:
+            net_returns = net_returns.groupby(level=0).last().sort_index()
         net_equity = base * (1.0 + net_returns).cumprod()
         stats = self._calculator.summarize(net_equity, net_returns)
         reports["net"] = PortfolioReport(

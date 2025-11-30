@@ -1,28 +1,26 @@
 from __future__ import annotations
 
-import sys
 import calendar
+import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-import logging
-import pandas as pd
-
 import matplotlib.pyplot as plt
+import pandas as pd
 import plotly.express as px
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.report import _select_font
-from backtest.portfolio import PositionLedgerEntry, TradeRecord
-from backtest.report import BacktestReport
-from backtest.runner import Backtester
+from backtest.config import BenchmarkType
 from backtest.data_sources import BacktestDataset
 from backtest.main import ExampleRunner
-from backtest.config import BenchmarkType
+from backtest.portfolio import PositionLedgerEntry, TradeRecord
+from backtest.report import BacktestReport, _select_font
+from backtest.runner import Backtester
 
 font_name = _select_font()
 plt.rcParams["font.family"] = font_name
