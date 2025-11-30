@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sys
 import math
+import sys
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -174,6 +174,7 @@ class BacktestConfig:
     rebalance_frequency: str = "M"
     min_assets: int = 20
     min_score: float | None = None
+    min_assets_per_quantile: bool = False
     active_quantiles: Sequence[int] | None = None
     active_quantiles: Sequence[int] | None = None
     benchmark_symbol: BenchmarkType | str | None = BenchmarkType.KOSPI200
@@ -271,6 +272,7 @@ class BacktestConfig:
             allow_partial=self.allow_partial_buckets,
             min_score=self.min_score,
             enabled_quantiles=self.active_quantiles,
+            min_assets_per_quantile=self.min_assets_per_quantile,
         )
         
         if not self.sector_neutral:

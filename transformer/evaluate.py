@@ -254,7 +254,7 @@ if __name__ == "__main__":
         name=name,
         model_type=model_type,
         timeframe="MEDIUM",
-        cnn_window=5,
+        cnn_window=20,
         crash_threshold=crash_threshold,
     )
     

@@ -47,6 +47,7 @@ class QuantileGroupingStrategy(PortfolioGroupingStrategy):
         allow_partial: bool = False,
         min_score: float | None = None,
         enabled_quantiles: Sequence[int] | None = None,
+        min_assets_per_quantile: bool = False,
     ) -> None:
         self._allocator = QuantileAllocator(
             quantiles=quantiles,
@@ -54,6 +55,8 @@ class QuantileGroupingStrategy(PortfolioGroupingStrategy):
             allow_partial=allow_partial,
             min_score=min_score,
         )
+        self._min_assets = min_assets
+        self._min_assets_per_quantile = min_assets_per_quantile
         if enabled_quantiles:
             ids = sorted({int(q) for q in enabled_quantiles})
         else:
@@ -78,6 +81,19 @@ class QuantileGroupingStrategy(PortfolioGroupingStrategy):
         for idx in self._quantile_ids:
             label = self._label_map[idx]
             selections[label] = allocation.tickers_for(idx)
+
+        if not allocation.skipped and self._min_assets_per_quantile:
+            shortfalls = {label: len(tickers) for label, tickers in selections.items() if len(tickers) < self._min_assets}
+            if shortfalls:
+                detail = ", ".join(f"{label}={size}" for label, size in shortfalls.items())
+                message = f"Quantile allocation below min_assets {self._min_assets} after filtering: {detail}."
+                empty = {label: tuple() for label in selections}
+                return PortfolioAllocationResult(
+                    selections=empty,
+                    total_assets=allocation.total_assets,
+                    skipped=True,
+                    message=message,
+                )
         return PortfolioAllocationResult(
             selections=selections,
             total_assets=allocation.total_assets,
