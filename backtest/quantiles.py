@@ -22,18 +22,28 @@ class QuantileAllocation:
 
 
 class QuantileAllocator:
-    def __init__(self, quantiles: int, min_assets: int, allow_partial: bool = False) -> None:
+    def __init__(self, quantiles: int, min_assets: int, allow_partial: bool = False, min_score: float | None = None) -> None:
         if quantiles < 1:
             raise ValueError("At least one quantile is required.")
         self.quantiles = quantiles
         self.min_assets = min_assets
         self.allow_partial = allow_partial
+        self.min_score = min_score
 
     def assign(self, scores: pd.Series) -> QuantileAllocation:
         clean_scores = scores.dropna()
         asset_count = len(clean_scores)
         if asset_count == 0:
             return self._empty_allocation(reason="No assets had valid scores.")
+
+        if self.min_score is not None:
+            clean_scores = clean_scores[clean_scores >= self.min_score]
+            asset_count = len(clean_scores)
+            if asset_count == 0:
+                return self._empty_allocation(
+                    reason=f"No assets met minimum score >= {self.min_score}.",
+                    total=0,
+                )
 
         if asset_count < self.quantiles:
             return self._empty_allocation(reason="Not enough assets to form quantiles.")
