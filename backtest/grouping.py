@@ -45,9 +45,15 @@ class QuantileGroupingStrategy(PortfolioGroupingStrategy):
         quantiles: int,
         min_assets: int,
         allow_partial: bool = False,
+        min_score: float | None = None,
         enabled_quantiles: Sequence[int] | None = None,
     ) -> None:
-        self._allocator = QuantileAllocator(quantiles=quantiles, min_assets=min_assets, allow_partial=allow_partial)
+        self._allocator = QuantileAllocator(
+            quantiles=quantiles,
+            min_assets=min_assets,
+            allow_partial=allow_partial,
+            min_score=min_score,
+        )
         if enabled_quantiles:
             ids = sorted({int(q) for q in enabled_quantiles})
         else:

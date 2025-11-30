@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.config import BacktestConfig, BenchmarkType, score_path, transformer_score_path
+from backtest.config import (BacktestConfig, BenchmarkType, score_path,
+                             transformer_score_path)
 from backtest.runner import Backtester
 from backtest.validate import run_validation_example
 from core.spec import MarketUniverse
@@ -93,6 +94,11 @@ def _transformer_scores_lp(mode: str = "TEST") -> Tuple[Path, ...]:
     )
 
 
+def _transformer_scores_mmcrash(mode: str = "TEST") -> Tuple[Path, ...]:
+    name = f"transformer_{mode.lower()}_medium_mmcrash"
+    return (transformer_score_path(name=name),)
+
+
 EXAMPLES: Dict[str, ExampleSpec] = {
     "cnn_single_test": ExampleSpec(
         name="cnn_single_test",
@@ -165,8 +171,25 @@ EXAMPLES: Dict[str, ExampleSpec] = {
             "active_quantiles": (0, 1, 2, 3, 4),
             "label_prefix": "multi",
             "portfolio_weighting": "eq",
+            "constituent_universe": MarketUniverse.KOSPI200,
+            "benchmark_symbol": None,
         },
         output_filename="backtest_transformer_medium_multi.png",
+    ),
+    "transformer_medium_mmcrash": ExampleSpec(
+        name="transformer_medium_mmcrash",
+        scores=_transformer_scores_mmcrash(),
+        group_selector=("q1", "q2", "q3", "q4", "q5"),
+        overrides={
+            "active_quantiles": (0, 1, 2, 3, 4),
+            "label_prefix": "mmcrash",
+            "portfolio_weighting": "eq",
+            "constituent_universe": MarketUniverse.KOSPI200,
+            "benchmark_symbol": None,
+            "min_assets": 10,
+            "min_score": 0.0,
+        },
+        output_filename="backtest_transformer_medium_mmcrash.png",
     ),
 }
 
@@ -219,5 +242,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    examples = ("transformer_medium_multi",)
+    examples = ("transformer_medium_mmcrash",)
     main(examples)

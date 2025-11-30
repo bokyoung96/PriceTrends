@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import math
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -172,6 +173,7 @@ class BacktestConfig:
     quantiles: int = 5
     rebalance_frequency: str = "M"
     min_assets: int = 20
+    min_score: float | None = None
     active_quantiles: Sequence[int] | None = None
     active_quantiles: Sequence[int] | None = None
     benchmark_symbol: BenchmarkType | str | None = BenchmarkType.KOSPI200
@@ -267,6 +269,7 @@ class BacktestConfig:
             quantiles=self.quantiles,
             min_assets=self.min_assets,
             allow_partial=self.allow_partial_buckets,
+            min_score=self.min_score,
             enabled_quantiles=self.active_quantiles,
         )
         
@@ -343,6 +346,9 @@ class BacktestConfig:
             raise ValueError("quantiles must be at least 1.")
         if self.min_assets < self.quantiles:
             raise ValueError("min_assets must be >= quantiles to form buckets.")
+        if self.min_score is not None:
+            if not math.isfinite(float(self.min_score)):
+                raise ValueError("min_score must be finite when provided.")
         for field_name in ("buy_cost_bps", "sell_cost_bps", "tax_bps"):
             value = getattr(self, field_name)
             if value < 0:

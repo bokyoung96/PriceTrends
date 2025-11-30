@@ -1,14 +1,15 @@
 import logging
 import sys
 from pathlib import Path
+
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.root import RESULTS_ROOT, SCORES_ROOT
 from transformer.params import TransformerParams, build_name
+from utils.root import RESULTS_ROOT, SCORES_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ if __name__ == "__main__":
     params = TransformerParams()
     tcfg = params.get_config(mode="TEST", timeframe="MEDIUM")
     
-    model_type = "multi"
+    model_type = "multimodal_crash"
     name = build_name(tcfg.mode, model_type)
     
     maker = ScoreMaker(mode="TEST", name=name)

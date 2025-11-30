@@ -72,5 +72,15 @@ class TransformerParams:
 
 
 def build_name(mode: str, model_type: str, base: str = "transformer") -> str:
-    suffix = "_multi" if model_type.lower() == "multi" else ""
+    mt = model_type.lower()
+    if mt == "multi":
+        suffix = "_multi"
+    elif mt == "crash":
+        suffix = "_crash"
+    elif mt == "multimodal_crash":
+        suffix = "_mmcrash"
+    elif mt == "cnn":
+        suffix = "_cnn"
+    else:
+        suffix = ""
     return f"{base}_{mode.lower()}{suffix}"

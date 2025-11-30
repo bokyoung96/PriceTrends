@@ -617,7 +617,9 @@ class BacktestReport:
         tokens = [
             token
             for token in stem.split("_")
-            if token.lower().startswith(("test", "origin", "i", "r", "fusion", "transformer", "short", "medium", "long"))
+            if token.lower().startswith(
+                ("test", "origin", "i", "r", "fusion", "transformer", "short", "medium", "long", "mmcrash")
+            )
         ]
         suffix = "_".join(tokens) if tokens else stem
         freq = self.config.rebalance_frequency.upper()
@@ -645,4 +647,3 @@ class BacktestReport:
         key = str(value).lower()
         label = mapping.get(key, str(mode) if mode is not None else "Equal Weight")
         return f"{label} ({key})"
-
