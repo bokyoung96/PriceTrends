@@ -99,6 +99,11 @@ def _transformer_scores_mmcrash(mode: str = "TEST") -> Tuple[Path, ...]:
     return (transformer_score_path(name=name),)
 
 
+def _transformer_scores_mmfusion(mode: str = "TEST") -> Tuple[Path, ...]:
+    name = f"transformer_{mode.lower()}_medium_mmfusion"
+    return (transformer_score_path(name=name),)
+
+
 EXAMPLES: Dict[str, ExampleSpec] = {
     "cnn_single_test": ExampleSpec(
         name="cnn_single_test",
@@ -132,7 +137,7 @@ EXAMPLES: Dict[str, ExampleSpec] = {
     ),
     "full_comparison": ExampleSpec(
         name="full_comparison",
-        scores=_cnn_scores() + _transformer_scores_default() + _transformer_scores_lp(),
+        scores=_cnn_scores() + _transformer_scores_default() + _transformer_scores_lp() + _transformer_scores_mmfusion(),
         group_selector="q5",
     ),
     "transformer_long_short": ExampleSpec(
@@ -191,6 +196,22 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         },
         output_filename="backtest_transformer_medium_mmcrash.png",
     ),
+    "transformer_medium_mmfusion": ExampleSpec(
+        name="transformer_medium_mmfusion",
+        scores=_transformer_scores_mmfusion(),
+        group_selector=("q1", "q2", "q3", "q4", "q5"),
+        overrides={
+            "active_quantiles": (0, 1, 2, 3, 4,),
+            "label_prefix": "mmfusion",
+            "portfolio_weighting": "eq",
+            "constituent_universe": MarketUniverse.KOSPI200,
+            "benchmark_symbol": BenchmarkType.KOSPI200,
+            "min_assets": 40,
+            "min_score": 0.6,
+            "allow_partial_buckets": True,
+        },
+        output_filename="backtest_transformer_medium_mmfusion.png",
+    ),
 }
 
 
@@ -220,7 +241,7 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
             tax_bps=tax_bps,
             entry_lag=entry_lag,
             entry_price_mode=entry_price_mode,
-            benchmark_symbol=benchmark,
+            benchmark_symbol=BenchmarkType.KOSPI200,
             start_date="2012-01-31",
         )
     )
@@ -242,5 +263,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    examples = ("transformer_medium_mmcrash",)
+    examples = ("transformer_medium_mmfusion",)
     main(examples)
