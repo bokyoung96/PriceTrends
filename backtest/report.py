@@ -109,6 +109,7 @@ class BacktestReport:
             {
                 "font.family": font_name,
                 "font.sans-serif": [font_name],
+                "axes.unicode_minus": False,
                 "axes.titleweight": "semibold",
                 "axes.labelcolor": "#1C1C1E",
                 "axes.facecolor": "#FFFFFF",

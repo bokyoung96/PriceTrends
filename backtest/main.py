@@ -19,6 +19,10 @@ from core.spec import MarketUniverse
 logger = logging.getLogger(__name__)
 DEFAULT_UNIVERSE: MarketUniverse | None = MarketUniverse.KOSPI200
 
+# Filled by `main()` for interactive inspection.
+LAST_RUNNER: "ExampleRunner | None" = None
+LAST_RESULTS: Dict[str, Backtester] = {}
+
 
 def _build_config(portfolio_weighting: str = "mc", **overrides) -> BacktestConfig:
     base: dict[str, object] = {}
@@ -101,6 +105,11 @@ def _transformer_scores_mmcrash(mode: str = "TEST") -> Tuple[Path, ...]:
 
 def _transformer_scores_mmfusion(mode: str = "TEST") -> Tuple[Path, ...]:
     name = f"transformer_{mode.lower()}_medium_mmfusion"
+    return (transformer_score_path(name=name),)
+
+
+def _transformer_scores_mfd(mode: str = "TEST", timeframe: str = "MEDIUM") -> Tuple[Path, ...]:
+    name = f"transformer_{mode.lower()}_{timeframe.lower()}_mfd"
     return (transformer_score_path(name=name),)
 
 
@@ -212,10 +221,37 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         },
         output_filename="backtest_transformer_medium_mmfusion.png",
     ),
+    "transformer_medium_mfd": ExampleSpec(
+        name="transformer_medium_mfd",
+        scores=_transformer_scores_mfd(mode="TEST", timeframe="MEDIUM"),
+        group_selector=("q1", "q2", "q3", "q4", "q5"),
+        overrides={
+            "active_quantiles": (0, 1, 2, 3, 4),
+            "label_prefix": "mfd",
+            "portfolio_weighting": "eq",
+            "constituent_universe": MarketUniverse.KOSPI200,
+            "benchmark_symbol": BenchmarkType.KOSPI200,
+        },
+        output_filename="backtest_transformer_medium_mfd.png",
+    ),
+    "transformer_medium_mfd_min_score": ExampleSpec(
+        name="transformer_medium_mfd_min_score",
+        scores=_transformer_scores_mfd(mode="TEST", timeframe="MEDIUM"),
+        group_selector=("q1", "q2", "q3", "q4", "q5"),
+        overrides={
+            "active_quantiles": (0, 1, 2, 3, 4),
+            "label_prefix": "mfd_min_score",
+            "portfolio_weighting": "eq",
+            "constituent_universe": MarketUniverse.KOSPI200,
+            "benchmark_symbol": BenchmarkType.KOSPI200,
+            "min_score": 0.55,
+        },
+        output_filename="backtest_transformer_medium_mfd_min_score.png",
+    ),
 }
 
 
-def main(selected_examples: Tuple[str, ...] | None = None) -> None:
+def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtester]:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     if not selected_examples:
@@ -246,11 +282,16 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
         )
     )
 
+    results: Dict[str, Backtester] = {}
     for name in targets:
         try:
-            runner.run_named(name)
+            results[name] = runner.run_named(name)
         except Exception as exc:
             logger.warning("%s run failed: %s", name, exc)
+
+    global LAST_RUNNER, LAST_RESULTS
+    LAST_RUNNER = runner
+    LAST_RESULTS = dict(results)
 
     # NOTE: For validation examples
     # try:
@@ -260,8 +301,9 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> None:
     #     )
     # except Exception as exc:
     #     logger.warning("Validation example failed: %s", exc)
+    return results
 
 
 if __name__ == "__main__":
-    examples = ("transformer_medium_mmfusion",)
+    examples = ("transformer_medium_mfd_min_score",)
     main(examples)
