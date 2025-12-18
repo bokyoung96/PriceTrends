@@ -46,7 +46,7 @@ if __name__ == "__main__":
     params = TransformerParams()
     tcfg = params.get_config(mode="TEST", timeframe="MEDIUM")
     
-    model_type = "multimodal_crash"
+    model_type = "multimodal"
     name = build_name(tcfg.mode, model_type)
     
     maker = ScoreMaker(mode="TEST", name=name)

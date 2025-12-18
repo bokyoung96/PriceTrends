@@ -81,6 +81,8 @@ def build_name(mode: str, model_type: str, base: str = "transformer") -> str:
         suffix = "_mmcrash"
     elif mt == "cnn":
         suffix = "_cnn"
+    elif mt == "multimodal":
+        suffix = "_mmfusion"
     else:
         suffix = ""
     return f"{base}_{mode.lower()}{suffix}"

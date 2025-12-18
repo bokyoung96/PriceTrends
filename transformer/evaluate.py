@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 import pandas as pd
 import torch
@@ -18,6 +19,11 @@ from transformer.model.model2 import MultiHeadTransformer
 from transformer.model.model3 import (CrashTransformer, MultiModalCrash,
                                       get_multimodal_loaders, load_cnn_cfg,
                                       load_transformer_cfg)
+from transformer.model.model4 import (
+    MultiModalFusion,
+    get_multimodal_v2_loaders,
+    load_cnn_cfgs,
+)
 from transformer.params import TransformerParams, build_name
 from transformer.pipeline import Config, get_loaders
 from utils.root import MODELS_ROOT, RESULTS_ROOT
@@ -32,14 +38,14 @@ class Evaluator:
         name: str = "transformer",
         model_type: str = "transformer",
         timeframe: str = "MEDIUM",
-        cnn_window: int = 5,
+        cnn_windows: Optional[List[int]] = None,
         crash_threshold: float = 0.1,
     ):
         self.cfg = cfg
         self.name = name
         self.model_type = model_type.lower()
         self.timeframe = timeframe
-        self.cnn_window = cnn_window
+        self.cnn_windows = cnn_windows or [5]
         self.crash_threshold = crash_threshold
 
         sel = DeviceSelector()
@@ -60,7 +66,8 @@ class Evaluator:
     ):
         if self.model_type == "multimodal_crash":
             tf_cfg = load_transformer_cfg(mode="TEST", timeframe=self.timeframe)
-            cnn_cfg = load_cnn_cfg(mode="TEST", window=self.cnn_window)
+            primary_window = self.cnn_windows[0]
+            cnn_cfg = load_cnn_cfg(mode="TEST", window=primary_window)
             ct = self.crash_threshold if crash_threshold is None else crash_threshold
             loaders, seq_shape, image_shape = get_multimodal_loaders(
                 tf_cfg,
@@ -72,6 +79,21 @@ class Evaluator:
             tf_cfg.seq_len, tf_cfg.n_feat = seq_shape
             cnn_cfg.image_shape = image_shape
             model = MultiModalCrash(tf_cfg, cnn_cfg).to(self.dev)
+            loader = loaders["validate"]
+            return loader, model
+        if self.model_type == "multimodal":
+            tf_cfg = load_transformer_cfg(mode="TEST", timeframe=self.timeframe)
+            cnn_cfgs = load_cnn_cfgs(mode="TEST", windows=self.cnn_windows)
+            loaders, seq_shape, image_shapes = get_multimodal_v2_loaders(
+                tf_cfg,
+                cnn_cfgs,
+                batch=batch,
+                workers=0,
+            )
+            tf_cfg.seq_len, tf_cfg.n_feat = seq_shape
+            for cfg in cnn_cfgs:
+                cfg.image_shape = image_shapes[int(cfg.window)]
+            model = MultiModalFusion(tf_cfg, cnn_cfgs).to(self.dev)
             loader = loaders["validate"]
             return loader, model
 
@@ -162,6 +184,14 @@ class Evaluator:
                     a = b["asset"]
                     crash_prob = F.softmax(crash_logits, dim=1)[:, 1]
                     all_crash_probs.extend(crash_prob.cpu().numpy())
+                elif self.model_type == "multimodal":
+                    seq = b["input"].to(self.dev)
+                    imgs = [img.to(self.dev) for img in b["images"]]
+                    out = model({"input": seq, "images": imgs})
+                    logits = out["return"]
+                    y = b["label"].to(self.dev)
+                    d = b["date"]
+                    a = b["asset"]
                 else:
                     x = b["input"].to(self.dev)
                     y = b["label"].to(self.dev)
@@ -213,6 +243,8 @@ class Evaluator:
             dd_pred = pd.Series(all_dd_pred, name="dd_pred")
             df["dd_pred"] = dd_pred.values
             df["score"] = df["prob_up"] - k * df["dd_pred"]
+        elif self.model_type == "multimodal":
+            df["score"] = df["prob_up"]
 
         return df
     
@@ -232,8 +264,9 @@ if __name__ == "__main__":
     params = TransformerParams()
     tcfg = params.get_config(mode="TEST", timeframe="MEDIUM")
 
-    model_type = "multimodal_crash"
+    model_type = "multimodal"
     crash_threshold = 0.05
+    cnn_windows = [5, 20]
     
     cfg = Config(
         lookback=tcfg.lookback,
@@ -254,7 +287,7 @@ if __name__ == "__main__":
         name=name,
         model_type=model_type,
         timeframe="MEDIUM",
-        cnn_window=5,
+        cnn_windows=cnn_windows,
         crash_threshold=crash_threshold,
     )
     

@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -21,6 +21,11 @@ from transformer.model.model1 import Transformer
 from transformer.model.model2 import MultiHeadTransformer
 from transformer.model.model3 import (MultiModalCrash, get_multimodal_loaders,
                                       load_cnn_cfg, load_transformer_cfg)
+from transformer.model.model4 import (
+    MultiModalFusion,
+    get_multimodal_v2_loaders,
+    load_cnn_cfgs,
+)
 from transformer.model.registry import MODEL_REGISTRY
 from transformer.params import build_name
 from transformer.pipeline import Config, get_loaders
@@ -70,15 +75,21 @@ class Trainer:
         model_type: str = "transformer",
         mode: str = "TEST",
         timeframe: str = "MEDIUM",
-        cnn_window: int = 5,
+        cnn_windows: Optional[List[int]] = None,
     ):
         self.model_type = model_type.lower()
         self.mode = mode
         self.timeframe = timeframe
-        self.cnn_window = cnn_window
+        self.cnn_windows = cnn_windows or [5]
+        self.primary_cnn_window = self.cnn_windows[0]
 
         self.tf_cfg = load_transformer_cfg(mode=mode, timeframe=timeframe)
-        self.cnn_cfg = load_cnn_cfg(mode=mode, window=cnn_window) if self.model_type in ("cnn", "multimodal_crash") else None
+        self.cnn_cfg = (
+            load_cnn_cfg(mode=mode, window=self.primary_cnn_window)
+            if self.model_type in ("cnn", "multimodal_crash")
+            else None
+        )
+        self.cnn_cfgs = load_cnn_cfgs(mode=mode, windows=self.cnn_windows) if self.model_type == "multimodal" else None
 
         sel = DeviceSelector()
         self.dev = sel.resolve()
@@ -118,6 +129,18 @@ class Trainer:
             )
             self.tf_cfg.seq_len, self.tf_cfg.n_feat = seq_shape
             self.cnn_cfg.image_shape = image_shape
+            return loaders
+        if self.model_type == "multimodal" and self.cnn_cfgs is not None:
+            loaders, seq_shape, image_shapes = get_multimodal_v2_loaders(
+                self.tf_cfg,
+                self.cnn_cfgs,
+                batch=batch,
+                ratio=ratio,
+                workers=workers,
+            )
+            self.tf_cfg.seq_len, self.tf_cfg.n_feat = seq_shape
+            for cfg in self.cnn_cfgs:
+                cfg.image_shape = image_shapes[int(cfg.window)]
             return loaders
 
         raise ValueError(f"Unsupported model_type: {self.model_type}")
@@ -165,6 +188,10 @@ class Trainer:
             )
         if self.model_type == "multimodal_crash":
             return MultiModalCrash(self.tf_cfg, self.cnn_cfg)
+        if self.model_type == "multimodal":
+            if self.cnn_cfgs is None:
+                raise ValueError("cnn_cfgs must be set for multimodal training.")
+            return MultiModalFusion(self.tf_cfg, self.cnn_cfgs)
 
         raise ValueError(f"Unsupported model_type for training: {self.model_type}")
 
@@ -223,6 +250,14 @@ class Trainer:
                             logits = model(batch_data["image"].to(self.dev))
                             main_logits = logits
                             loss = crit_cls(logits, batch_data["label"].to(self.dev))
+                        elif self.model_type == "multimodal":
+                            seq = batch_data["input"].to(self.dev)
+                            imgs = [img.to(self.dev) for img in batch_data["images"]]
+                            y = batch_data["label"].to(self.dev)
+                            out = model({"input": seq, "images": imgs})
+                            logits = out["return"]
+                            main_logits = logits
+                            loss = crit_cls(logits, y)
                         elif self.model_type == "multi":
                             x = batch_data["input"].to(self.dev)
                             y = batch_data["label"].to(self.dev)
@@ -271,12 +306,17 @@ class Trainer:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    model_type = "multimodal_crash"
+    model_type = "multimodal"
     mode = "TEST"
     timeframe = "MEDIUM"
-    cnn_window = 5
+    cnn_windows = [5, 20]
 
-    trainer = Trainer(model_type=model_type, mode=mode, timeframe=timeframe, cnn_window=cnn_window)
+    trainer = Trainer(
+        model_type=model_type,
+        mode=mode,
+        timeframe=timeframe,
+        cnn_windows=cnn_windows,
+    )
     trainer.train(
         epochs=trainer.tf_cfg.max_epoch,
         batch=trainer.tf_cfg.batch_size,

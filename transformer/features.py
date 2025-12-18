@@ -79,6 +79,47 @@ def get_bb(v: Views, window: int = 20, num_std: float = 2.0, **kwargs) -> pd.Dat
     # NOTE: Center around 0
     return bb_position - 0.5
 
+def get_atr(v: Views, window: int = 14, **kwargs) -> pd.DataFrame:
+    prev_close = v.close.shift(1)
+    hl = v.high - v.low
+    hc = (v.high - prev_close).abs()
+    lc = (v.low - prev_close).abs()
+    tr = np.maximum.reduce([hl.to_numpy(), hc.to_numpy(), lc.to_numpy()])
+    tr_df = pd.DataFrame(tr, index=v.close.index, columns=v.close.columns)
+    atr = tr_df.rolling(window, min_periods=1).mean()
+    return atr / v.close.replace(0.0, np.nan)
+
+def get_downsidevol(v: Views, window: int = 20, **kwargs) -> pd.DataFrame:
+    neg = v.log_ret.where(v.log_ret < 0.0, 0.0)
+    dv = neg.pow(2).rolling(window, min_periods=1).mean().apply(np.sqrt)
+    return dv
+
+def get_ulcer(v: Views, window: int = 20, **kwargs) -> pd.DataFrame:
+    rolling_max = v.close.rolling(window, min_periods=1).max()
+    dd = (v.close / rolling_max) - 1.0
+    ulcer = dd.pow(2).rolling(window, min_periods=1).mean().apply(np.sqrt)
+    return ulcer
+
+def get_stoch(v: Views, window: int = 14, smooth_k: int = 3, smooth_d: int = 3, **kwargs) -> pd.DataFrame:
+    highest_high = v.high.rolling(window, min_periods=1).max()
+    lowest_low = v.low.rolling(window, min_periods=1).min()
+    raw_k = (v.close - lowest_low) / (highest_high - lowest_low).replace(0.0, np.nan)
+    smooth_k_df = raw_k.rolling(smooth_k, min_periods=1).mean()
+    smooth_d_df = smooth_k_df.rolling(smooth_d, min_periods=1).mean()
+    return smooth_d_df.fillna(0.0) - 0.5
+
+def get_mfi(v: Views, window: int = 14, **kwargs) -> pd.DataFrame:
+    tp = (v.high + v.low + v.close) / 3.0
+    mf = tp * v.volume
+    delta_tp = tp.diff()
+    pos_flow = mf.where(delta_tp > 0.0, 0.0)
+    neg_flow = mf.where(delta_tp < 0.0, 0.0)
+    pos_sum = pos_flow.rolling(window, min_periods=1).sum()
+    neg_sum = neg_flow.rolling(window, min_periods=1).sum().replace(0.0, np.nan)
+    mfr = pos_sum / neg_sum
+    mfi = 100 - (100 / (1 + mfr))
+    return (mfi / 100.0) - 0.5
+
 
 REGISTRY = {
     "logreturn": get_logreturn,
@@ -92,6 +133,11 @@ REGISTRY = {
     "ma": get_ma,
     "ema": get_ema,
     "bb": get_bb,
+    "atr": get_atr,
+    "downsidevol": get_downsidevol,
+    "ulcer": get_ulcer,
+    "stoch": get_stoch,
+    "mfi": get_mfi,
 }
 
 
