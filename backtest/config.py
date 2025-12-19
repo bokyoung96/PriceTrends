@@ -183,6 +183,7 @@ class BacktestConfig:
     sector_path: Path | str = field(default_factory=_default_sector_path)
     portfolio_grouping: PortfolioGroupingStrategy | None = None
     label_prefix: str | None = None
+    report_title: str | None = None
 
     portfolio_weighting: PortfolioWeights | str = PortfolioWeights.EQUAL
     weight_data_path: Path | str | None = field(default_factory=_default_weight_data_path)

@@ -19,7 +19,20 @@ from backtest.report import BacktestReport, PortfolioReport
 
 GroupSelector = str | int | Sequence[str | int] | None
 ScoreInput = Path | str | Sequence[Path | str] | None
-LABEL_TOKEN_PREFIXES = ("test", "origin", "fusion", "i", "r", "transformer", "short", "medium", "long", "lp", "mmcrash")
+LABEL_TOKEN_PREFIXES = (
+    "test",
+    "origin",
+    "fusion",
+    "i",
+    "r",
+    "transformer",
+    "short",
+    "medium",
+    "long",
+    "lp",
+    "mmcrash",
+    "mfd",
+)
 
 
 def _label_from_path(path: Path) -> str:
@@ -31,6 +44,10 @@ def _label_from_path(path: Path) -> str:
         lower = part.lower()
         if lower.startswith(LABEL_TOKEN_PREFIXES):
             if lower == "lp" and i + 1 < len(parts) and parts[i + 1].isdigit():
+                tokens.append(f"{part}_{parts[i + 1]}")
+                i += 2
+                continue
+            if lower == "mfd" and i + 1 < len(parts) and parts[i + 1].isdigit():
                 tokens.append(f"{part}_{parts[i + 1]}")
                 i += 2
                 continue

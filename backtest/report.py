@@ -394,8 +394,11 @@ class BacktestReport:
             active = [f"q{idx + 1}" for idx in self.config.active_quantiles]
             group_label = f"{len(active)} buckets ({', '.join(active)})"
         stem = self.config.scores_path[0].stem
-        tokens = [tok for tok in stem.split("_") if tok.lower().startswith("i") or tok.lower().startswith("r")]
-        stem_hint = "_".join(tokens) if tokens else stem
+        if self.config.report_title:
+            stem_hint = str(self.config.report_title)
+        else:
+            tokens = [tok for tok in stem.split("_") if tok.lower().startswith("i") or tok.lower().startswith("r")]
+            stem_hint = "_".join(tokens) if tokens else stem
         title = f"PriceTrends Backtest – {freq} – {group_label} ({stem_hint})"
         fig.text(0.05, 0.97, title, fontsize=17, fontweight="bold")
         fig.text(0.05, 0.93, f"{start:%Y-%m-%d} to {end:%Y-%m-%d}", fontsize=11, color="#6C6C70")
