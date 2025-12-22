@@ -65,8 +65,11 @@ class RebalancePlanner:
         return list(self._windows)
 
     def _build_schedule(self) -> list[pd.Timestamp]:
+        freq = self.frequency
+        if isinstance(freq, str) and freq.upper() == "M":
+            freq = "ME"
         series = pd.Series(index=self._dates, data=self._dates)
-        grouped = series.resample(self.frequency).last().dropna()
+        grouped = series.resample(freq).last().dropna()
         # NOTE: Use actual trading dates from the values (avoid calendar labels like month-end).
         schedule = [pd.Timestamp(ts) for ts in grouped.to_numpy()]
         last_date = self._dates[-1]
