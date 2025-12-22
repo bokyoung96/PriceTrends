@@ -420,7 +420,7 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtest
         raise ValueError("selected_examples must be provided and non-empty.")
     targets = selected_examples
 
-    apply_trading_costs = True
+    apply_trading_costs = False
     buy_cost_bps = 2.0
     sell_cost_bps = 2.0
     tax_bps = 15.0
@@ -440,7 +440,7 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtest
             entry_lag=entry_lag,
             entry_price_mode=entry_price_mode,
             benchmark_symbol=BenchmarkType.KOSPI200,
-            start_date="2012-01-31",
+            start_date="2020-01-31",
         )
     )
 
@@ -467,5 +467,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtest
 
 
 if __name__ == "__main__":
-    examples = ("transformer_medium_mfd_q5_sweep","transformer_long_short_sector_neutral")
+    examples = ("transformer_long_short_sector_neutral",)
     main(examples)

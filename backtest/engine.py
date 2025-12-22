@@ -66,9 +66,9 @@ class RebalancePlanner:
 
     def _build_schedule(self) -> list[pd.Timestamp]:
         series = pd.Series(index=self._dates, data=self._dates)
-        grouped = series.resample(self.frequency).first().dropna()
-        # NOTE: Use resample labels (e.g. month-end, week-end) as signal dates
-        schedule = [pd.Timestamp(ts) for ts in grouped.index]
+        grouped = series.resample(self.frequency).last().dropna()
+        # NOTE: Use actual trading dates from the values (avoid calendar labels like month-end).
+        schedule = [pd.Timestamp(ts) for ts in grouped.to_numpy()]
         last_date = self._dates[-1]
         if not schedule or schedule[-1] != last_date:
             schedule.append(last_date)
@@ -425,6 +425,8 @@ class BacktestEngine:
         if not net_returns_parts:
             return
         net_returns = pd.concat(net_returns_parts).sort_index()
+        # Remove duplicated boundary dates from adjacent segments (keep the earlier segment).
+        net_returns = net_returns[~net_returns.index.duplicated(keep="first")]
         net_equity = base * (1.0 + net_returns).cumprod()
         stats = self._calculator.summarize(net_equity, net_returns)
         reports["net"] = PortfolioReport(
