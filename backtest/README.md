@@ -108,6 +108,11 @@ print(report.summary_table())
 
 ---
 
+## Note: Dollar-neutral display
+
+- When `long_short_mode=NET` and `dollar_neutral_net=True`, the `net` curve uses dollar-neutral rebalancing.
+- The leg curves (e.g. `q1`, `q5`) are computed from a no-DN run to show pure long-only/short-only leg performance without cash-flow jumps.
+
 ## 6. 테스트/확장 힌트
 
 - `Backtester.run()`은 동일한 코드 경로로 단일/배치 실행을 수행하므로, 테스트 코드도 동일한 경로만 검증하면 됩니다.

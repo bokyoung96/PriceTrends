@@ -100,9 +100,14 @@ class BacktestReport:
 
     def _build_report_figure(self) -> Figure:
         equity = self.equity_frame()
+        equity_plot = self._normalize_equity(equity)
         returns_frame = self.return_frame()
         summary = self.summary_table()
         bench = self._benchmark_series(equity.index)
+        if bench is not None and not bench.empty:
+            bench_plot = bench / bench.iloc[0]
+        else:
+            bench_plot = None
 
         font_name = _select_font()
         plt.rcParams.update(
@@ -141,17 +146,17 @@ class BacktestReport:
         ax_excess = fig.add_subplot(right_spec[2, 0])
         ax_table = fig.add_subplot(grid[2, :])
 
-        palette = self._color_palette(len(equity.columns))
-        color_map = dict(zip(equity.columns, palette))
+        palette = self._color_palette(len(equity_plot.columns))
+        color_map = dict(zip(equity_plot.columns, palette))
         self._style_axis(ax_equity)
         for column, color in color_map.items():
-            values = equity[column]
-            ax_equity.plot(equity.index, values, label=column, color=color, linewidth=2.4)
-            ax_equity.fill_between(equity.index, values, color=color, alpha=0.12)
-        if bench is not None:
-            ax_equity.plot(bench.index, bench.values, color="#8E8E93", linestyle="--", linewidth=1.8, label="Benchmark")
+            values = equity_plot[column]
+            ax_equity.plot(equity_plot.index, values, label=column, color=color, linewidth=2.4)
+            ax_equity.fill_between(equity_plot.index, values, color=color, alpha=0.12)
+        if bench_plot is not None:
+            ax_equity.plot(bench_plot.index, bench_plot.values, color="#8E8E93", linestyle="--", linewidth=1.8, label="Benchmark")
         ax_equity.set_title("PriceTrends Quintile Equity", fontsize=11, fontweight="semibold")
-        ax_equity.set_ylabel("Equity (KRW)")
+        ax_equity.set_ylabel("Indexed Equity")
         ax_equity.legend(loc="upper left", ncol=3, frameon=False)
 
         self._plot_drawdown(ax_drawdown, equity, color_map, bench)
@@ -195,6 +200,16 @@ class BacktestReport:
                 suffix = f" ({self.config.rebalance_frequency.upper()})"
             return f"{value * 100:0.2f}%{suffix}"
         return f"{value:0.4f}"
+
+    def _normalize_equity(self, equity: pd.DataFrame) -> pd.DataFrame:
+        normalized = equity.copy()
+        for column in normalized.columns:
+            series = normalized[column].dropna()
+            if series.empty:
+                normalized[column] = pd.Series(index=normalized.index, dtype=float)
+                continue
+            normalized[column] = normalized[column] / series.iloc[0]
+        return normalized
 
     def _style_axis(self, axis: Axes, *, rounded: bool = True) -> None:
         axis.set_facecolor("#FFFFFF")
