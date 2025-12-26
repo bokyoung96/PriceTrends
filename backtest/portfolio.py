@@ -254,7 +254,7 @@ class PortfolioTrack:
         if daily_equity is not None and not daily_equity.empty:
             for timestamp, value in daily_equity.sort_index().items():
                 ts = pd.Timestamp(timestamp)
-                if ts not in self._equity:
+                if ts == pd.Timestamp(enter_date) or ts not in self._equity:
                     self._equity[ts] = float(value)
         self._equity[pd.Timestamp(exit_date)] = capital_out
         period_return = 0.0 if capital_in == 0 else (capital_out / capital_in) - 1.0

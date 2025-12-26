@@ -214,15 +214,33 @@ class BacktestEngine:
         self._group_sides: dict[str, PositionSide] = {}
 
     def run(self) -> BacktestReport:
+        return self._run(swap_leg_reports=True)
+
+    def run_raw(self) -> BacktestReport:
+        """Run backtest without swapping DN legs to no-DN curves."""
+        return self._run(swap_leg_reports=False)
+
+    def _run(self, *, swap_leg_reports: bool) -> BacktestReport:
         timeline = self._build_timeline()
         groups = self.grouping.groups()
         label_map = {group.identifier: group.label for group in groups}
+        group_sides = {group.identifier: self._group_side(group.identifier) for group in groups}
+        long_ids = [gid for gid, side in group_sides.items() if side is PositionSide.LONG]
+        short_ids = [gid for gid, side in group_sides.items() if side is PositionSide.SHORT]
+        long_cap, short_cap = self._initial_side_capitals(long_ids, short_ids)
         portfolios = {
             group.identifier: PortfolioTrack(
                 group_id=group.identifier,
-                starting_capital=self.config.initial_capital,
+                starting_capital=self._starting_capital(
+                    group.identifier,
+                    group_sides[group.identifier],
+                    long_ids,
+                    short_ids,
+                    long_cap,
+                    short_cap,
+                ),
                 cost_model=self.cost_model,
-                side=self._group_side(group.identifier),
+                side=group_sides[group.identifier],
             )
             for group in groups
         }
@@ -231,6 +249,7 @@ class BacktestEngine:
             portfolio.mark_initial(timeline.anchor)
 
         for payload in self._iter_windows(timeline.windows()):
+            self._rebalance_dollar_neutral(portfolios)
             allocation = self.grouping.allocate(payload.scores)
             note = allocation.message if allocation.skipped else None
             for group_id, portfolio in portfolios.items():
@@ -248,8 +267,74 @@ class BacktestEngine:
 
         reports = {gid: self._build_group_report(portfolio) for gid, portfolio in portfolios.items()}
         self._add_net_report(reports, label_map)
+        if swap_leg_reports:
+            # NOTE: In dollar-neutral mode, keep net as DN but show leg curves as standalone (no-DN) P&L.
+            self._swap_leg_reports(reports)
         bench_equity = self._benchmark_equity_series()
         return BacktestReport(config=self.config, groups=reports, bench_equity=bench_equity, labels=label_map)
+
+    def _initial_side_capitals(self, long_ids: list[str], short_ids: list[str]) -> tuple[float, float]:
+        if not self._dollar_neutral_enabled() or not long_ids or not short_ids:
+            return self.config.initial_capital, self.config.initial_capital
+        half = float(self.config.initial_capital) / 2.0
+        return half, half
+
+    def _starting_capital(
+        self,
+        group_id: str,
+        side: PositionSide,
+        long_ids: list[str],
+        short_ids: list[str],
+        long_cap: float,
+        short_cap: float,
+    ) -> float:
+        if not self._dollar_neutral_enabled():
+            return float(self.config.initial_capital)
+        if side is PositionSide.LONG and long_ids:
+            return long_cap / len(long_ids)
+        if side is PositionSide.SHORT and short_ids:
+            return short_cap / len(short_ids)
+        return float(self.config.initial_capital)
+
+    def _rebalance_dollar_neutral(self, portfolios: dict[str, PortfolioTrack]) -> None:
+        if not self._dollar_neutral_enabled():
+            return
+        long_ids = [gid for gid, side in self._group_sides.items() if side is PositionSide.LONG]
+        short_ids = [gid for gid, side in self._group_sides.items() if side is PositionSide.SHORT]
+        if not long_ids or not short_ids:
+            return
+        long_total = sum(portfolios[gid].capital for gid in long_ids)
+        short_total = sum(portfolios[gid].capital for gid in short_ids)
+        total = long_total + short_total
+        if total <= 0:
+            return
+        target = total / 2.0
+        self._scale_side_capital(portfolios, long_ids, target, long_total)
+        self._scale_side_capital(portfolios, short_ids, target, short_total)
+
+    def _scale_side_capital(
+        self,
+        portfolios: dict[str, PortfolioTrack],
+        side_ids: list[str],
+        target: float,
+        side_total: float,
+    ) -> None:
+        if not side_ids:
+            return
+        if side_total <= 0:
+            equal = target / len(side_ids)
+            for gid in side_ids:
+                portfolios[gid].capital = equal
+            return
+        for gid in side_ids:
+            weight = portfolios[gid].capital / side_total
+            portfolios[gid].capital = target * weight
+
+    def _dollar_neutral_enabled(self) -> bool:
+        return (
+            self.config.long_short_mode is LongShortMode.NET
+            and bool(self.config.dollar_neutral_net)
+        )
 
     def _build_group_report(self, portfolio: PortfolioTrack) -> PortfolioReport:
         equity = portfolio.equity_series()
@@ -390,9 +475,6 @@ class BacktestEngine:
         shorts = [gid for gid, side in self._group_sides.items() if side is PositionSide.SHORT and gid in reports]
         if not longs or not shorts:
             return
-        base = float(self.config.initial_capital)
-        if base <= 0:
-            return
         long_id = longs[0]
         short_id = shorts[0]
         long_eq = reports[long_id].equity_curve
@@ -400,37 +482,11 @@ class BacktestEngine:
         all_dates = pd.Index(sorted(set(long_eq.index) | set(short_eq.index)))
         long_eq = long_eq.reindex(all_dates).ffill()
         short_eq = short_eq.reindex(all_dates).ffill()
-
-        rebalance_dates = sorted(
-            set(trade.enter_date for trade in reports[long_id].trades)
-            | set(trade.enter_date for trade in reports[short_id].trades)
-        )
-        if not rebalance_dates:
-            rebalance_dates = [all_dates[0]]
-        segments = rebalance_dates + [all_dates[-1]]
-
-        gross_const = base * 2.0
-        net_returns_parts: list[pd.Series] = []
-        for start, end in zip(segments[:-1], segments[1:]):
-            mask = (all_dates >= start) & (all_dates <= end)
-            segment_idx = all_dates[mask]
-            if segment_idx.empty:
-                continue
-            gross = (long_eq.loc[start] + short_eq.loc[start]) if self.config.dollar_neutral_net else gross_const
-            if gross == 0:
-                continue
-            pnl = (long_eq.loc[segment_idx] - long_eq.loc[segment_idx].shift()).fillna(0.0) + (
-                short_eq.loc[segment_idx] - short_eq.loc[segment_idx].shift()
-            ).fillna(0.0)
-            ret = (pnl / gross).fillna(0.0)
-            net_returns_parts.append(ret)
-
-        if not net_returns_parts:
+        net_equity = long_eq.add(short_eq, fill_value=0.0)
+        net_equity = net_equity.sort_index()
+        if net_equity.empty:
             return
-        net_returns = pd.concat(net_returns_parts).sort_index()
-        # Remove duplicated boundary dates from adjacent segments (keep the earlier segment).
-        net_returns = net_returns[~net_returns.index.duplicated(keep="first")]
-        net_equity = base * (1.0 + net_returns).cumprod()
+        net_returns = net_equity.pct_change().fillna(0.0)
         stats = self._calculator.summarize(net_equity, net_returns)
         reports["net"] = PortfolioReport(
             group_id="net",
@@ -440,3 +496,24 @@ class BacktestEngine:
             stats=stats,
         )
         labels["net"] = "net"
+
+    def _swap_leg_reports(self, reports: dict[str, PortfolioReport]) -> None:
+        if not self._dollar_neutral_enabled():
+            return
+        baseline_config = self.config.with_overrides(
+            dollar_neutral_net=False,
+            long_short_mode=LongShortMode.LEGS,
+        )
+        baseline_engine = BacktestEngine(
+            config=baseline_config,
+            dataset=self.dataset,
+            grouping=self.grouping,
+            cost_model=self.cost_model,
+        )
+        baseline_report = baseline_engine.run()
+        for group_id, baseline in baseline_report.groups.items():
+            if group_id == "net":
+                continue
+            if group_id not in reports:
+                continue
+            reports[group_id] = baseline

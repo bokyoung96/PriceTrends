@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.config import BacktestConfig, BenchmarkType, EntryPriceMode
-from backtest.engine import RebalancePlanner
+from backtest.config import BacktestConfig, BenchmarkType, EntryPriceMode, LongShortMode
+from backtest.data_sources import BacktestDataset
+from backtest.engine import BacktestEngine, RebalancePlanner
 from backtest.main import EXAMPLES, ExampleRunner
 from backtest.runner import Backtester
-from backtest.report import _select_font
+from backtest.report import BacktestReport, _select_font
 
 
 @dataclass(frozen=True)
@@ -132,9 +133,28 @@ def sector_monthly_holdings(config: BacktestConfig, sector_name: str) -> pd.Data
     if sector_scores.empty:
         return pd.DataFrame()
 
-    tester = Backtester(config.with_overrides(sector_neutral=False))
-    report = tester.run(scores=sector_scores, prices=dataset.prices)
-    short_ids = _short_group_ids(config)
+    sector_prices = dataset.prices.reindex(columns=sector_scores.columns)
+    sector_weights = dataset.weights.reindex(columns=sector_scores.columns) if dataset.weights is not None else None
+    sector_open = dataset.open_prices.reindex(columns=sector_scores.columns) if dataset.open_prices is not None else None
+    sector_dataset = BacktestDataset(
+        scores=sector_scores,
+        prices=sector_prices,
+        bench=dataset.bench,
+        weights=sector_weights,
+        open_prices=sector_open,
+    )
+
+    base_config = config.with_overrides(sector_neutral=False)
+    base_engine = BacktestEngine(base_config, sector_dataset)
+    report = base_engine.run()
+    short_ids = _short_group_ids(base_config)
+    dn_map: dict[tuple[pd.Timestamp, pd.Timestamp, str, str, str], tuple[float, float, float, float, float, float]] = {}
+    dn_net_map: dict[tuple[pd.Timestamp, pd.Timestamp], tuple[float, float, float, float]] = {}
+    if base_config.long_short_mode is LongShortMode.NET and base_config.dollar_neutral_net:
+        dn_engine = BacktestEngine(base_config, sector_dataset)
+        dn_report = dn_engine.run_raw()
+        dn_map = _build_position_map(dn_report, short_ids)
+        dn_net_map = _build_net_window_map(dn_report, short_ids)
 
     rows: list[dict[str, object]] = []
     for group_id, group in report.groups.items():
@@ -146,6 +166,35 @@ def sector_monthly_holdings(config: BacktestConfig, sector_name: str) -> pd.Data
                 entry_value = float(pos.entry_value)
                 exit_value = float(pos.exit_value)
                 pos_return = 0.0 if entry_value == 0 else (exit_value / entry_value) - 1.0
+                key = (trade.enter_date, trade.exit_date, side, group_id, str(pos.ticker))
+                dn_entry_value = None
+                dn_exit_value = None
+                dn_pos_return = None
+                dn_trade_in = None
+                dn_trade_out = None
+                dn_trade_return = None
+                dn_net_gross = None
+                dn_net_equity_entry = None
+                dn_net_equity_exit = None
+                dn_net_return = None
+                dn_values = dn_map.get(key)
+                if dn_values is not None:
+                    (
+                        dn_entry_value,
+                        dn_exit_value,
+                        dn_pos_return,
+                        dn_trade_in,
+                        dn_trade_out,
+                        dn_trade_return,
+                    ) = dn_values
+                dn_net_values = dn_net_map.get((trade.enter_date, trade.exit_date))
+                if dn_net_values is not None:
+                    (
+                        dn_net_gross,
+                        dn_net_equity_entry,
+                        dn_net_equity_exit,
+                        dn_net_return,
+                    ) = dn_net_values
                 rows.append(
                     {
                         "entry_date": trade.enter_date,
@@ -159,6 +208,16 @@ def sector_monthly_holdings(config: BacktestConfig, sector_name: str) -> pd.Data
                         "entry_value": entry_value,
                         "exit_value": exit_value,
                         "position_return": pos_return,
+                        "dn_entry_value": dn_entry_value,
+                        "dn_exit_value": dn_exit_value,
+                        "dn_position_return": dn_pos_return,
+                        "dn_trade_capital_in": dn_trade_in,
+                        "dn_trade_capital_out": dn_trade_out,
+                        "dn_trade_return": dn_trade_return,
+                        "dn_net_gross": dn_net_gross,
+                        "dn_net_equity_entry": dn_net_equity_entry,
+                        "dn_net_equity_exit": dn_net_equity_exit,
+                        "dn_net_return": dn_net_return,
                     }
                 )
 
@@ -240,6 +299,85 @@ def _short_group_ids(config: BacktestConfig) -> set[str]:
     if config.short_quantiles:
         return {f"q{int(idx) + 1}" for idx in config.short_quantiles}
     return {"q1"}
+
+
+def _build_position_map(
+    report: BacktestReport,
+    short_ids: set[str],
+) -> dict[tuple[pd.Timestamp, pd.Timestamp, str, str, str], tuple[float, float, float, float, float, float]]:
+    mapping: dict[tuple[pd.Timestamp, pd.Timestamp, str, str, str], tuple[float, float, float, float, float, float]] = {}
+    for group_id, group in report.groups.items():
+        if group_id == "net":
+            continue
+        side = "short" if group_id in short_ids else "long"
+        for trade in group.trades:
+            trade_in = float(trade.capital_in)
+            trade_out = float(trade.capital_out)
+            trade_return = float(trade.period_return)
+            for pos in trade.positions:
+                entry_value = float(pos.entry_value)
+                exit_value = float(pos.exit_value)
+                pos_return = 0.0 if entry_value == 0 else (exit_value / entry_value) - 1.0
+                key = (trade.enter_date, trade.exit_date, side, group_id, str(pos.ticker))
+                mapping[key] = (
+                    entry_value,
+                    exit_value,
+                    pos_return,
+                    trade_in,
+                    trade_out,
+                    trade_return,
+                )
+    return mapping
+
+
+def _build_net_window_map(
+    report: BacktestReport,
+    short_ids: set[str],
+) -> dict[tuple[pd.Timestamp, pd.Timestamp], tuple[float, float, float, float]]:
+    net = report.groups.get("net")
+    if net is None or net.equity_curve.empty:
+        return {}
+    long_ids = [gid for gid in report.groups.keys() if gid != "net" and gid not in short_ids]
+    short_ids_in_report = [gid for gid in report.groups.keys() if gid in short_ids]
+    if not long_ids or not short_ids_in_report:
+        return {}
+    long_id = long_ids[0]
+    short_id = short_ids_in_report[0]
+    long_eq = report.groups[long_id].equity_curve
+    short_eq = report.groups[short_id].equity_curve
+    if long_eq.empty or short_eq.empty:
+        return {}
+
+    all_dates = pd.Index(sorted(set(long_eq.index) | set(short_eq.index)))
+    long_eq = long_eq.reindex(all_dates).ffill()
+    short_eq = short_eq.reindex(all_dates).ffill()
+    net_equity = net.equity_curve.sort_index()
+
+    windows: set[tuple[pd.Timestamp, pd.Timestamp]] = set()
+    for trade in report.groups[long_id].trades:
+        windows.add((trade.enter_date, trade.exit_date))
+    for trade in report.groups[short_id].trades:
+        windows.add((trade.enter_date, trade.exit_date))
+
+    mapping: dict[tuple[pd.Timestamp, pd.Timestamp], tuple[float, float, float, float]] = {}
+    for enter_date, exit_date in sorted(windows):
+        gross = float(long_eq.loc[enter_date] + short_eq.loc[enter_date])
+        entry_equity = _equity_at(net_equity, enter_date)
+        exit_equity = _equity_at(net_equity, exit_date)
+        net_return = 0.0 if entry_equity == 0 else (exit_equity / entry_equity) - 1.0
+        mapping[(enter_date, exit_date)] = (gross, entry_equity, exit_equity, float(net_return))
+    return mapping
+
+
+def _equity_at(equity: pd.Series, date: pd.Timestamp) -> float:
+    if equity.empty:
+        return 0.0
+    if date in equity.index:
+        return float(equity.loc[date])
+    prior = equity.loc[:date]
+    if prior.empty:
+        return float(equity.iloc[0])
+    return float(prior.iloc[-1])
 
 
 def _save_sector_overview_plot(
