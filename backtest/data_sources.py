@@ -112,8 +112,6 @@ class BacktestDataLoader:
         self.end_date = end_date
         self._score_loader = FrameLoader("scores")
         self._price_loader = FrameLoader("close")
-        self._score_loader = FrameLoader("scores")
-        self._price_loader = FrameLoader("close")
         self._constituent_loader = FrameLoader("constituent")
         self._benchmark_loader = FrameLoader("benchmark") if benchmark_source is not None else None
         self._weight_loader = FrameLoader("weights") if weight_source is not None else None
@@ -122,8 +120,6 @@ class BacktestDataLoader:
     def build(self) -> BacktestDataset:
         scores = self._score_loader.load(self.scores_source)
         prices = self._price_loader.load(self.close_source)
-        weights = self._weight_loader.load(self.weight_source) if self._weight_loader is not None else None
-        open_prices = self._open_loader.load(self.open_source) if self._open_loader is not None else None
         weights = self._weight_loader.load(self.weight_source) if self._weight_loader is not None else None
         open_prices = self._open_loader.load(self.open_source) if self._open_loader is not None else None
         bench = None

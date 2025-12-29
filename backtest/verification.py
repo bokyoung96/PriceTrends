@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 from backtest.config import BacktestConfig, BenchmarkType, EntryPriceMode, LongShortMode
 from backtest.data_sources import BacktestDataset
 from backtest.engine import BacktestEngine, RebalancePlanner
-from backtest.main import EXAMPLES, ExampleRunner
+from backtest.main import EXAMPLES, ExampleRunner, ExampleSpec
 from backtest.runner import Backtester
 from backtest.report import BacktestReport, _select_font
 
@@ -36,14 +36,54 @@ class SectorBacktestResult(NamedTuple):
     stats: dict[str, float]
 
 
+def _pick_example(name: str | None) -> ExampleSpec:
+    if name is None:
+        if "ls_sn_global" in EXAMPLES:
+            return EXAMPLES["ls_sn_global"]
+        if EXAMPLES:
+            first_key = next(iter(EXAMPLES))
+            return EXAMPLES[first_key]
+        raise KeyError("No examples available.")
+    if name not in EXAMPLES:
+        raise KeyError(f"Unknown example: {name}")
+    return EXAMPLES[name]
+
+
+def _sector_frame(config: BacktestConfig, dataset: BacktestDataset) -> pd.DataFrame:
+    sector_panel = _load_sector_panel(config.sector_path)
+    return _align_sector_panel(sector_panel, dataset.scores.index, dataset.scores.columns)
+
+
+def _monthly_returns(equity: pd.DataFrame) -> pd.DataFrame:
+    if equity.empty:
+        return equity
+    monthly = equity.resample("ME").last().dropna(how="all")
+    if monthly.empty:
+        return monthly
+    if len(monthly.index) < 2:
+        return pd.DataFrame()
+    returns = monthly.pct_change().dropna(how="all")
+    if returns.empty:
+        return pd.DataFrame()
+    entry_map = pd.Series(monthly.index[:-1], index=returns.index)
+    long_df = returns.stack().reset_index()
+    long_df.columns = ["exit_date", "sector", "monthly_return"]
+    long_df["entry_date"] = long_df["exit_date"].map(entry_map)
+    return long_df[["entry_date", "exit_date", "sector", "monthly_return"]]
+
+
+def _sec_cfg(config: BacktestConfig) -> BacktestConfig:
+    if config.sector_neutral or config.sector_unit:
+        return config.with_overrides(sector_neutral=False, sector_unit=False)
+    return config
+
+
 def run_verification(
-    example_name: str = "transformer_long_short_sector_neutral",
+    example_name: str | None = None,
     *,
     base_opts: dict[str, object] | None = None,
 ) -> dict[str, Path]:
-    spec = EXAMPLES.get(example_name)
-    if spec is None:
-        raise KeyError(f"Unknown example: {example_name}")
+    spec = _pick_example(example_name)
 
     runner = ExampleRunner(base_opts=base_opts or {})
     tester = runner.run_spec(spec)
@@ -57,31 +97,42 @@ def run_verification(
     else:
         stem = Path(report._auto_filename()).stem
 
-    sector_results = run_sector_backtests(config)
+    dataset = config.data_loader().build()
+    sector_frame = _sector_frame(config, dataset)
+    sector_results = run_sector_backtests(config, dataset=dataset, sector_frame=sector_frame)
     if sector_results:
         equity_frame = pd.DataFrame({k: v.equity for k, v in sector_results.items()}).sort_index()
         returns_frame = pd.DataFrame({k: v.returns for k, v in sector_results.items()}).sort_index()
         drawdown_frame = equity_frame.divide(equity_frame.cummax()).subtract(1.0).fillna(0.0)
+        monthly_frame = _monthly_returns(equity_frame)
         summary_frame = pd.DataFrame({k: v.stats for k, v in sector_results.items()}).T
 
         equity_frame.to_excel(out_dir / f"sector_equity_{stem}.xlsx")
         returns_frame.to_excel(out_dir / f"sector_returns_{stem}.xlsx")
+        if not monthly_frame.empty:
+            monthly_frame.to_excel(out_dir / f"sector_returns_m_{stem}.xlsx")
         drawdown_frame.to_excel(out_dir / f"sector_drawdown_{stem}.xlsx")
         summary_frame.to_excel(out_dir / f"sector_summary_{stem}.xlsx")
         _save_sector_overview_plot(sector_results, out_dir, stem)
         _save_sector_subplot_plot(sector_results, out_dir, stem)
         _save_sector_summary_png(summary_frame, out_dir, stem)
 
-    df = sector_top_bottom(config)
+    df = sector_top_bottom(config, dataset=dataset, sector_frame=sector_frame)
     xlsx_path = out_dir / f"sector_top_bottom_{stem}.xlsx"
     df.to_excel(xlsx_path, index=False)
     return {"xlsx": xlsx_path}
 
 
-def sector_top_bottom(config: BacktestConfig) -> pd.DataFrame:
-    dataset = config.data_loader().build()
-    sector_panel = _load_sector_panel(config.sector_path)
-    sector_frame = _align_sector_panel(sector_panel, dataset.scores.index, dataset.scores.columns)
+def sector_top_bottom(
+    config: BacktestConfig,
+    *,
+    dataset: BacktestDataset | None = None,
+    sector_frame: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if dataset is None:
+        dataset = config.data_loader().build()
+    if sector_frame is None:
+        sector_frame = _sector_frame(config, dataset)
     planner = RebalancePlanner(dataset.scores.index, config.rebalance_frequency, entry_lag=config.entry_lag)
 
     rows: list[dict[str, object]] = []
@@ -127,8 +178,7 @@ def sector_monthly_picks(config: BacktestConfig, sector_name: str) -> pd.DataFra
 
 def sector_monthly_holdings(config: BacktestConfig, sector_name: str) -> pd.DataFrame:
     dataset = config.data_loader().build()
-    sector_panel = _load_sector_panel(config.sector_path)
-    sector_frame = _align_sector_panel(sector_panel, dataset.scores.index, dataset.scores.columns)
+    sector_frame = _sector_frame(config, dataset)
     sector_scores = dataset.scores.where(sector_frame == sector_name).dropna(axis=1, how="all")
     if sector_scores.empty:
         return pd.DataFrame()
@@ -144,7 +194,7 @@ def sector_monthly_holdings(config: BacktestConfig, sector_name: str) -> pd.Data
         open_prices=sector_open,
     )
 
-    base_config = config.with_overrides(sector_neutral=False)
+    base_config = _sec_cfg(config)
     base_engine = BacktestEngine(base_config, sector_dataset)
     report = base_engine.run()
     short_ids = _short_group_ids(base_config)
@@ -229,16 +279,22 @@ def sector_monthly_holdings(config: BacktestConfig, sector_name: str) -> pd.Data
     return df
 
 
-def run_sector_backtests(config: BacktestConfig) -> dict[str, SectorBacktestResult]:
-    dataset = config.data_loader().build()
-    sector_panel = _load_sector_panel(config.sector_path)
-    sector_frame = _align_sector_panel(sector_panel, dataset.scores.index, dataset.scores.columns)
+def run_sector_backtests(
+    config: BacktestConfig,
+    *,
+    dataset: BacktestDataset | None = None,
+    sector_frame: pd.DataFrame | None = None,
+) -> dict[str, SectorBacktestResult]:
+    if dataset is None:
+        dataset = config.data_loader().build()
+    if sector_frame is None:
+        sector_frame = _sector_frame(config, dataset)
     sector_names = sorted(pd.unique(sector_frame.stack().dropna()))
     if not sector_names:
         return {}
 
     results: dict[str, SectorBacktestResult] = {}
-    base_config = config.with_overrides(sector_neutral=False)
+    base_config = _sec_cfg(config)
     for sector in sector_names:
         sector_scores = dataset.scores.where(sector_frame == sector)
         sector_scores = sector_scores.dropna(axis=1, how="all")
@@ -341,27 +397,22 @@ def _build_net_window_map(
     short_ids_in_report = [gid for gid in report.groups.keys() if gid in short_ids]
     if not long_ids or not short_ids_in_report:
         return {}
-    long_id = long_ids[0]
-    short_id = short_ids_in_report[0]
-    long_eq = report.groups[long_id].equity_curve
-    short_eq = report.groups[short_id].equity_curve
-    if long_eq.empty or short_eq.empty:
-        return {}
-
-    all_dates = pd.Index(sorted(set(long_eq.index) | set(short_eq.index)))
-    long_eq = long_eq.reindex(all_dates).ffill()
-    short_eq = short_eq.reindex(all_dates).ffill()
+    eq_map = {
+        gid: report.groups[gid].equity_curve.sort_index()
+        for gid in long_ids + short_ids_in_report
+    }
     net_equity = net.equity_curve.sort_index()
 
     windows: set[tuple[pd.Timestamp, pd.Timestamp]] = set()
-    for trade in report.groups[long_id].trades:
-        windows.add((trade.enter_date, trade.exit_date))
-    for trade in report.groups[short_id].trades:
-        windows.add((trade.enter_date, trade.exit_date))
+    for gid in long_ids + short_ids_in_report:
+        for trade in report.groups[gid].trades:
+            windows.add((trade.enter_date, trade.exit_date))
 
     mapping: dict[tuple[pd.Timestamp, pd.Timestamp], tuple[float, float, float, float]] = {}
     for enter_date, exit_date in sorted(windows):
-        gross = float(long_eq.loc[enter_date] + short_eq.loc[enter_date])
+        gross = 0.0
+        for series in eq_map.values():
+            gross += _equity_at(series, enter_date)
         entry_equity = _equity_at(net_equity, enter_date)
         exit_equity = _equity_at(net_equity, exit_date)
         net_return = 0.0 if entry_equity == 0 else (exit_equity / entry_equity) - 1.0
@@ -558,9 +609,10 @@ if __name__ == "__main__":
         benchmark_symbol=BenchmarkType.KOSPI200,
         start_date="2012-01-31",
     )
-    paths = run_verification(base_opts=default_opts)
+    name = "ls_sn_global"
+    paths = run_verification(example_name=name, base_opts=default_opts)
     print(f"Saved verification outputs: {paths}")
     runner = ExampleRunner(base_opts=default_opts)
-    tester = runner.run_spec(EXAMPLES["transformer_long_short_sector_neutral"])
+    tester = runner.run_spec(_pick_example(name))
     health_df = sector_monthly_holdings(tester.latest_report().config, "건강관리")
     print(health_df.head())
