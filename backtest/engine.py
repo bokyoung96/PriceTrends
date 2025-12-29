@@ -212,6 +212,7 @@ class BacktestEngine:
         self._validate_weight_support()
         self._short_groups = self._short_group_ids()
         self._group_sides: dict[str, PositionSide] = {}
+        self._sector_panel = self._init_sector_panel()
 
     def run(self) -> BacktestReport:
         return self._run(swap_leg_reports=True)
@@ -411,6 +412,29 @@ class BacktestEngine:
             entry_prices=entry_prices,
         )
 
+    def _init_sector_panel(self) -> pd.DataFrame | None:
+        if not (self.config.sector_neutral and self.config.sector_unit):
+            return None
+        panel = getattr(self.grouping, "sector_panel", None)
+        if isinstance(panel, pd.DataFrame):
+            return panel.sort_index()
+        path = Path(self.config.sector_path)
+        if path.exists():
+            return pd.read_parquet(path).sort_index()
+        return None
+
+    def _sector_row(self, date: pd.Timestamp) -> pd.Series | None:
+        panel = self._sector_panel
+        if panel is None or panel.empty:
+            return None
+        stamp = pd.Timestamp(date)
+        if stamp in panel.index:
+            return panel.loc[stamp]
+        pos = panel.index.searchsorted(stamp, side="right") - 1
+        if pos < 0:
+            return None
+        return panel.iloc[pos]
+
     def _portfolio_weights(
         self,
         group_id: str,
@@ -420,6 +444,8 @@ class BacktestEngine:
     ) -> pd.Series | None:
         if not tickers:
             return None
+        if self.config.sector_neutral and self.config.sector_unit:
+            return self._sector_unit_weights(group_id, signal_date, tickers, weight_row)
         if self.weighting is not PortfolioWeights.MARKET_CAP:
             return None
         if weight_row is None:
@@ -435,6 +461,47 @@ class BacktestEngine:
             self._log_weight_fallback(group_id, signal_date, "non-positive market-cap sum after clipping")
             return None
         return working / total
+
+    def _sector_unit_weights(
+        self,
+        group_id: str,
+        signal_date: pd.Timestamp,
+        tickers: Sequence[str],
+        weight_row: pd.Series | None,
+    ) -> pd.Series | None:
+        sector_row = self._sector_row(signal_date)
+        if sector_row is None:
+            self._log_weight_fallback(group_id, signal_date, "missing sector data for sector-unit weighting")
+            return None
+        sector = sector_row.reindex(tickers).dropna()
+        if sector.empty:
+            self._log_weight_fallback(group_id, signal_date, "no sector data for selected tickers")
+            return None
+        sector_count = int(sector.nunique())
+        if sector_count <= 0:
+            return None
+        weights = pd.Series(0.0, index=pd.Index(tickers, dtype=str))
+        for _, members in sector.groupby(sector):
+            names = list(members.index)
+            if not names:
+                continue
+            if self.weighting is PortfolioWeights.MARKET_CAP:
+                base = None
+                if weight_row is not None:
+                    base = pd.Series(weight_row, dtype=float).reindex(names)
+                    base = base.clip(lower=0.0)
+                    if base.isna().any() or base.sum() <= 0:
+                        base = None
+                if base is None:
+                    self._log_weight_fallback(group_id, signal_date, "missing market-cap data for sector-unit weighting")
+                    base = pd.Series(1.0, index=names, dtype=float)
+            else:
+                base = pd.Series(1.0, index=names, dtype=float)
+            base = base / base.sum()
+            weights.loc[names] = base * (1.0 / sector_count)
+        if weights.sum() <= 0:
+            return None
+        return weights
 
     def _log_weight_fallback(self, group_id: str, signal_date: pd.Timestamp, reason: str) -> None:
         logger.warning(
@@ -471,19 +538,15 @@ class BacktestEngine:
     def _add_net_report(self, reports: dict[str, PortfolioReport], labels: dict[str, str]) -> None:
         if self.config.long_short_mode is not LongShortMode.NET:
             return
-        longs = [gid for gid, side in self._group_sides.items() if side is PositionSide.LONG and gid in reports]
-        shorts = [gid for gid, side in self._group_sides.items() if side is PositionSide.SHORT and gid in reports]
-        if not longs or not shorts:
+        long_ids = [gid for gid, side in self._group_sides.items() if side is PositionSide.LONG and gid in reports]
+        short_ids = [gid for gid, side in self._group_sides.items() if side is PositionSide.SHORT and gid in reports]
+        if not long_ids or not short_ids:
             return
-        long_id = longs[0]
-        short_id = shorts[0]
-        long_eq = reports[long_id].equity_curve
-        short_eq = reports[short_id].equity_curve
-        all_dates = pd.Index(sorted(set(long_eq.index) | set(short_eq.index)))
-        long_eq = long_eq.reindex(all_dates).ffill()
-        short_eq = short_eq.reindex(all_dates).ffill()
-        net_equity = long_eq.add(short_eq, fill_value=0.0)
-        net_equity = net_equity.sort_index()
+        ids = long_ids + short_ids
+        df = pd.concat([reports[gid].equity_curve for gid in ids], axis=1).ffill()
+        if df.empty:
+            return
+        net_equity = df.sum(axis=1).sort_index()
         if net_equity.empty:
             return
         net_returns = net_equity.pct_change().fillna(0.0)

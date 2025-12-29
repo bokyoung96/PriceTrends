@@ -175,11 +175,11 @@ class BacktestConfig:
     min_assets: int = 20
     min_score: float | None = None
     active_quantiles: Sequence[int] | None = None
-    active_quantiles: Sequence[int] | None = None
     benchmark_symbol: BenchmarkType | str | None = BenchmarkType.KOSPI200
     benchmark_path: Path | str = field(default_factory=_default_benchmark_path)
     allow_partial_buckets: bool = False
     sector_neutral: bool = False
+    sector_unit: bool = False
     sector_path: Path | str = field(default_factory=_default_sector_path)
     portfolio_grouping: PortfolioGroupingStrategy | None = None
     label_prefix: str | None = None
@@ -194,8 +194,6 @@ class BacktestConfig:
     apply_trading_costs: bool = False
     buy_cost_bps: float = 0.0
     sell_cost_bps: float = 0.0
-    tax_bps: float = 0.0
-    entry_lag: int = 0
     tax_bps: float = 0.0
     entry_lag: int = 0
     show_progress: bool = True
@@ -227,8 +225,11 @@ class BacktestConfig:
         object.__setattr__(self, "benchmark_symbol", bench_type)
         object.__setattr__(self, "benchmark_path", self._to_project_path(self.benchmark_path))
         object.__setattr__(self, "sector_path", self._to_project_path(self.sector_path))
+        object.__setattr__(self, "sector_unit", bool(self.sector_unit))
 
         self._validate_numeric_fields()
+        if self.sector_unit and not self.sector_neutral:
+            raise ValueError("sector_unit requires sector_neutral=True.")
 
         if self.start_date is not None:
             object.__setattr__(self, "start_date", pd.Timestamp(self.start_date))
@@ -356,3 +357,5 @@ class BacktestConfig:
                 raise ValueError(f"{field_name} must be non-negative.")
         if self.entry_lag < 0:
             raise ValueError("entry_lag must be non-negative.")
+        if self.entry_lag > 0:
+            raise ValueError("entry_lag must be 0 (positive lag is disabled).")

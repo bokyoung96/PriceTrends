@@ -161,17 +161,22 @@ class BacktestReport:
 
         self._plot_drawdown(ax_drawdown, equity, color_map, bench)
 
-        group_labels = [idx for idx in summary.index if idx != "benchmark"]
-        if group_labels:
-            best_return_label = max(group_labels, key=lambda label: summary.loc[label, "pnl"])
-        else:
-            best_return_label = equity.columns[-1] if not equity.empty else "n/a"
-        best_color = color_map.get(best_return_label, "#4F5DFF")
-        best_returns = returns_frame.get(best_return_label)
-        best_equity = equity.get(best_return_label)
-        self._plot_return_hist(ax_hist, best_returns, best_return_label, best_color)
-        self._plot_monthly_heatmap(ax_heatmap, best_equity, best_return_label)
-        self._plot_excess_heatmap(ax_excess, best_equity, bench, best_return_label)
+        primary_label = "net" if "net" in equity.columns else None
+        if primary_label is None:
+            group_labels = [idx for idx in summary.index if idx != "benchmark"]
+            if group_labels:
+                primary_label = max(group_labels, key=lambda label: summary.loc[label, "pnl"])
+            else:
+                primary_label = equity.columns[-1] if not equity.empty else "n/a"
+        best_color = color_map.get(primary_label, "#4F5DFF")
+        best_returns = returns_frame.get(primary_label)
+        best_equity = equity.get(primary_label)
+        title_label = primary_label
+        if primary_label == "net":
+            title_label = "net (primary)"
+        self._plot_return_hist(ax_hist, best_returns, title_label, best_color)
+        self._plot_monthly_heatmap(ax_heatmap, best_equity, title_label)
+        self._plot_excess_heatmap(ax_excess, best_equity, bench, title_label)
 
         self._render_summary_table(ax_table, summary)
 

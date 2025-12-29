@@ -10,8 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.config import (BacktestConfig, BenchmarkType, score_path,
-                             transformer_score_path)
+from backtest.config import (
+    BacktestConfig,
+    BenchmarkType,
+    score_path,
+    transformer_score_path,
+)
 from backtest.runner import Backtester
 from backtest.validate import run_validation_example
 from core.spec import MarketUniverse
@@ -19,8 +23,56 @@ from core.spec import MarketUniverse
 logger = logging.getLogger(__name__)
 DEFAULT_UNIVERSE: MarketUniverse | None = MarketUniverse.KOSPI200
 
-LAST_RUNNER: "ExampleRunner | None" = None
-LAST_RESULTS: Dict[str, Backtester] = {}
+CFG_KEYS = (
+    "scores_path",
+    "close_path",
+    "output_dir",
+    "constituent_universe",
+    "constituent_path",
+    "initial_capital",
+    "quantiles",
+    "rebalance_frequency",
+    "min_assets",
+    "min_score",
+    "active_quantiles",
+    "benchmark_symbol",
+    "benchmark_path",
+    "allow_partial_buckets",
+    "sector_neutral",
+    "sector_unit",
+    "sector_path",
+    "portfolio_grouping",
+    "label_prefix",
+    "report_title",
+    "portfolio_weighting",
+    "weight_data_path",
+    "entry_price_mode",
+    "open_path",
+    "apply_trading_costs",
+    "buy_cost_bps",
+    "sell_cost_bps",
+    "tax_bps",
+    "entry_lag",
+    "show_progress",
+    "long_short_mode",
+    "short_quantiles",
+    "dollar_neutral_net",
+    "start_date",
+    "end_date",
+)
+
+BASE_OPTS = dict(
+    rebalance_frequency="M",
+    portfolio_weighting="eq",
+    apply_trading_costs=False,
+    buy_cost_bps=2.0,
+    sell_cost_bps=2.0,
+    tax_bps=15.0,
+    entry_lag=0,
+    entry_price_mode="close",
+    benchmark_symbol=BenchmarkType.KOSPI200,
+    start_date="2012-01-31",
+)
 
 
 def _build_config(portfolio_weighting: str = "mc", **overrides) -> BacktestConfig:
@@ -42,6 +94,15 @@ class ExampleSpec:
     sector_neutral: bool = False
     output_filename: str | None = None
     label_prefix: str | None = None
+
+
+@dataclass
+class RunState:
+    runner: "ExampleRunner | None" = None
+    results: Dict[str, Backtester] = field(default_factory=dict)
+
+
+LAST = RunState()
 
 
 class ExampleRunner:
@@ -118,6 +179,7 @@ def _transformer_scores_mfd_bottom_pct(*, bottom_pct: int) -> Tuple[Path, ...]:
 
 
 EXAMPLES: Dict[str, ExampleSpec] = {
+    # NOTE: CNN
     "cnn_single_test": ExampleSpec(
         name="cnn_single_test",
         scores=(score_path(20, 20, mode="TEST", fusion=False),),
@@ -133,6 +195,7 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         scores=_cnn_scores(),
         group_selector=("q1", "q5"),
     ),
+    # NOTE: Transformer core
     "transformer_medium": ExampleSpec(
         name="transformer_medium",
         scores=(transformer_score_path(mode="TEST", timeframe="MEDIUM"),),
@@ -150,9 +213,13 @@ EXAMPLES: Dict[str, ExampleSpec] = {
     ),
     "full_comparison": ExampleSpec(
         name="full_comparison",
-        scores=_cnn_scores() + _transformer_scores_default() + _transformer_scores_lp() + _transformer_scores_mmfusion(),
+        scores=_cnn_scores()
+        + _transformer_scores_default()
+        + _transformer_scores_lp()
+        + _transformer_scores_mmfusion(),
         group_selector="q5",
     ),
+    # NOTE: Long/short
     "transformer_long_short": ExampleSpec(
         name="transformer_long_short",
         scores=_transformer_scores_default(),
@@ -181,6 +248,39 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         },
         output_filename="backtest_long_short_sn_mfd_80.png",
     ),
+    "ls_sn_global": ExampleSpec(
+        name="ls_sn_global",
+        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=80),
+        group_selector=("q1", "q5", "net"),
+        sector_neutral=True,
+        overrides={
+            "active_quantiles": (0, 4),
+            "long_short_mode": "net",
+            "short_quantiles": (0,),
+            "min_assets": 5,
+            "label_prefix": "ls_sn_g_80",
+            "dollar_neutral_net": True,
+            "sector_unit": False,
+        },
+        output_filename="backtest_ls_sn_g_80.png",
+    ),
+    "ls_sn_unit": ExampleSpec(
+        name="ls_sn_unit",
+        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=80),
+        group_selector=("q1", "q5", "net"),
+        sector_neutral=True,
+        overrides={
+            "active_quantiles": (0, 4),
+            "long_short_mode": "net",
+            "short_quantiles": (0,),
+            "min_assets": 5,
+            "label_prefix": "ls_sn_u_80",
+            "dollar_neutral_net": True,
+            "sector_unit": True,
+        },
+        output_filename="backtest_ls_sn_u_80.png",
+    ),
+    # NOTE: Transformer variants
     "transformer_medium_multi": ExampleSpec(
         name="transformer_medium_multi",
         scores=(transformer_score_path(name="transformer_test_medium_multi"),),
@@ -214,7 +314,7 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         scores=_transformer_scores_mmfusion(),
         group_selector=("q1", "q2", "q3", "q4", "q5"),
         overrides={
-            "active_quantiles": (0, 1, 2, 3, 4,),
+            "active_quantiles": (0, 1, 2, 3, 4),
             "label_prefix": "mmfusion",
             "portfolio_weighting": "eq",
             "constituent_universe": MarketUniverse.KOSPI200,
@@ -252,165 +352,54 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         },
         output_filename="backtest_transformer_medium_mfd_min_score.png",
     ),
-       "transformer_medium_mfd_10": ExampleSpec(
-        name="transformer_medium_mfd_10",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=10),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_10_q5.png",
-    ),
-    "transformer_medium_mfd_20": ExampleSpec(
-        name="transformer_medium_mfd_20",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=20),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_20_q5.png",
-    ),
-    "transformer_medium_mfd_30": ExampleSpec(
-        name="transformer_medium_mfd_30",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=30),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_30_q5.png",
-    ),
-    "transformer_medium_mfd_40": ExampleSpec(
-        name="transformer_medium_mfd_40",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=40),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_40_q5.png",
-    ),
-    "transformer_medium_mfd_50": ExampleSpec(
-        name="transformer_medium_mfd_50",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=50),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_50_q5.png",
-    ),
-    "transformer_medium_mfd_60": ExampleSpec(
-        name="transformer_medium_mfd_60",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=60),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_60_q5.png",
-    ),
-    "transformer_medium_mfd_70": ExampleSpec(
-        name="transformer_medium_mfd_70",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=70),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_70_q5.png",
-    ),
-    "transformer_medium_mfd_80": ExampleSpec(
-        name="transformer_medium_mfd_80",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=80),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_80_q5.png",
-    ),
-    "transformer_medium_mfd_90": ExampleSpec(
-        name="transformer_medium_mfd_90",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=90),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_90_q5.png",
-    ),
-    "transformer_medium_mfd_100": ExampleSpec(
-        name="transformer_medium_mfd_100",
-        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=100),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-        },
-        output_filename="backtest_transformer_medium_mfd_100_q5.png",
-    ),
-    "transformer_medium_mfd_q5_sweep": ExampleSpec(
-        name="transformer_medium_mfd_q5_sweep",
-        scores=tuple(
-            transformer_score_path(name=f"transformer_medium_mfd_{p}")
-            for p in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
-        ),
-        group_selector="q5",
-        overrides={
-            "active_quantiles": (4,),
-            "portfolio_weighting": "eq",
-            "constituent_universe": MarketUniverse.KOSPI200,
-            "benchmark_symbol": BenchmarkType.KOSPI200,
-            "allow_partial_buckets": True,
-            "min_assets": 5,
-            "report_title": "transformer_medium_mfd_sweep",
-        },
-        output_filename="transformer_medium_mfd_sweep.png",
-    ),
 }
+
+
+def _mfd_q5(p: int) -> ExampleSpec:
+    return ExampleSpec(
+        name=f"transformer_medium_mfd_{p}",
+        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=p),
+        group_selector="q5",
+        overrides={
+            "active_quantiles": (4,),
+            "portfolio_weighting": "eq",
+            "constituent_universe": MarketUniverse.KOSPI200,
+            "benchmark_symbol": BenchmarkType.KOSPI200,
+            "allow_partial_buckets": True,
+            "min_assets": 5,
+        },
+        output_filename=f"backtest_transformer_medium_mfd_{p}_q5.png",
+    )
+
+
+for p in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100):
+    spec = _mfd_q5(p)
+    EXAMPLES[spec.name] = spec
+
+EXAMPLES["transformer_medium_mfd_q5_sweep"] = ExampleSpec(
+    name="transformer_medium_mfd_q5_sweep",
+    scores=tuple(
+        transformer_score_path(name=f"transformer_medium_mfd_{p}")
+        for p in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+    ),
+    group_selector="q5",
+    overrides={
+        "active_quantiles": (4,),
+        "portfolio_weighting": "eq",
+        "constituent_universe": MarketUniverse.KOSPI200,
+        "benchmark_symbol": BenchmarkType.KOSPI200,
+        "allow_partial_buckets": True,
+        "min_assets": 5,
+        "report_title": "transformer_medium_mfd_sweep",
+    },
+    output_filename="transformer_medium_mfd_sweep.png",
+)
+
+
+def show_cfg_keys() -> None:
+    print("Config keys:")
+    for key in CFG_KEYS:
+        print(f"- {key}")
 
 
 def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtester]:
@@ -418,42 +407,17 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtest
 
     if not selected_examples:
         raise ValueError("selected_examples must be provided and non-empty.")
-    targets = selected_examples
-
-    apply_trading_costs = True
-    buy_cost_bps = 2.0
-    sell_cost_bps = 2.0
-    tax_bps = 15.0
-    entry_lag = 0
-    entry_price_mode = "close"
-    benchmark = BenchmarkType.KOSPI200EQ
-    portfolio_weighting = "eq"
-
-    runner = ExampleRunner(
-        base_opts=dict(
-            rebalance_frequency="M",
-            portfolio_weighting=portfolio_weighting,
-            apply_trading_costs=apply_trading_costs,
-            buy_cost_bps=buy_cost_bps,
-            sell_cost_bps=sell_cost_bps,
-            tax_bps=tax_bps,
-            entry_lag=entry_lag,
-            entry_price_mode=entry_price_mode,
-            benchmark_symbol=BenchmarkType.KOSPI200,
-            start_date="2012-01-31",
-        )
-    )
+    runner = ExampleRunner(base_opts=BASE_OPTS)
 
     results: Dict[str, Backtester] = {}
-    for name in targets:
+    for name in selected_examples:
         try:
             results[name] = runner.run_named(name)
         except Exception as exc:
             logger.warning("%s run failed: %s", name, exc)
 
-    global LAST_RUNNER, LAST_RESULTS
-    LAST_RUNNER = runner
-    LAST_RESULTS = dict(results)
+    LAST.runner = runner
+    LAST.results = dict(results)
 
     # NOTE: For validation examples
     # try:
@@ -467,5 +431,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtest
 
 
 if __name__ == "__main__":
-    examples = ("transformer_long_short_sector_neutral",)
+    examples = ("ls_sn_global", "ls_sn_unit")
     main(examples)
