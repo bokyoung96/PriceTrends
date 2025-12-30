@@ -34,6 +34,8 @@ class SectorBacktestResult(NamedTuple):
     equity: pd.Series
     returns: pd.Series
     stats: dict[str, float]
+    long_equity: pd.Series
+    short_equity: pd.Series
 
 
 def _pick_example(name: str | None) -> ExampleSpec:
@@ -54,6 +56,174 @@ def _sector_frame(config: BacktestConfig, dataset: BacktestDataset) -> pd.DataFr
     return _align_sector_panel(sector_panel, dataset.scores.index, dataset.scores.columns)
 
 
+def _jaccard(left: set[str], right: set[str]) -> float | None:
+    if not left and not right:
+        return None
+    if not left or not right:
+        return 0.0
+    union = left | right
+    if not union:
+        return None
+    return len(left & right) / len(union)
+
+
+def _mean_jaccard(date_map: dict[pd.Timestamp, set[str]]) -> float | None:
+    dates = sorted(date_map)
+    if len(dates) < 2:
+        return None
+    values: list[float] = []
+    prev = date_map[dates[0]]
+    for date in dates[1:]:
+        current = date_map[date]
+        value = _jaccard(prev, current)
+        if value is not None:
+            values.append(float(value))
+        prev = current
+    if not values:
+        return None
+    return float(pd.Series(values).mean())
+
+
+def _sel_stability(
+    report: BacktestReport,
+    sector_frame: pd.DataFrame,
+    short_ids: set[str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    buckets = {"long": {}, "short": {}}
+    for group_id, group in report.groups.items():
+        if group_id == "net":
+            continue
+        side = "short" if group_id in short_ids else "long"
+        for trade in group.trades:
+            date = trade.enter_date
+            if date not in sector_frame.index:
+                continue
+            sector_row = sector_frame.loc[date]
+            for pos in trade.positions:
+                sector = sector_row.get(pos.ticker)
+                if pd.isna(sector):
+                    continue
+                sec = str(sector)
+                buckets[side].setdefault(sec, {}).setdefault(date, set()).add(str(pos.ticker))
+    long_stats: dict[str, float] = {}
+    short_stats: dict[str, float] = {}
+    for sector, date_map in buckets["long"].items():
+        value = _mean_jaccard(date_map)
+        if value is not None:
+            long_stats[sector] = value
+    for sector, date_map in buckets["short"].items():
+        value = _mean_jaccard(date_map)
+        if value is not None:
+            short_stats[sector] = value
+    return long_stats, short_stats
+
+
+def _ls_union_j(
+    report: BacktestReport,
+    sector_frame: pd.DataFrame,
+) -> dict[str, float]:
+    buckets: dict[str, dict[pd.Timestamp, set[str]]] = {}
+    for group_id, group in report.groups.items():
+        if group_id == "net":
+            continue
+        for trade in group.trades:
+            date = trade.enter_date
+            if date not in sector_frame.index:
+                continue
+            sector_row = sector_frame.loc[date]
+            for pos in trade.positions:
+                sector = sector_row.get(pos.ticker)
+                if pd.isna(sector):
+                    continue
+                sec = str(sector)
+                buckets.setdefault(sec, {}).setdefault(date, set()).add(str(pos.ticker))
+    results: dict[str, float] = {}
+    for sector, date_map in buckets.items():
+        value = _mean_jaccard(date_map)
+        if value is not None:
+            results[sector] = value
+    return results
+
+
+def _sum_equity(groups: dict, ids: Iterable[str]) -> pd.Series:
+    ids = list(ids)
+    if not ids:
+        return pd.Series(dtype=float)
+    df = pd.concat([groups[gid].equity_curve for gid in ids], axis=1).ffill()
+    if df.empty:
+        return pd.Series(dtype=float)
+    return df.sum(axis=1).sort_index()
+
+
+def _leg_equity(report: BacktestReport, short_ids: set[str]) -> tuple[pd.Series, pd.Series]:
+    long_ids = [gid for gid in report.groups if gid != "net" and gid not in short_ids]
+    short_ids_in = [gid for gid in report.groups if gid in short_ids]
+    return _sum_equity(report.groups, long_ids), _sum_equity(report.groups, short_ids_in)
+
+
+def _attrib_report(report: BacktestReport, dataset: BacktestDataset) -> BacktestReport:
+    cfg = report.config
+    if cfg.long_short_mode is not LongShortMode.NET or not cfg.dollar_neutral_net:
+        return report
+    score_paths = getattr(cfg, "scores_path", None)
+    if not score_paths:
+        return report
+    if not all(Path(path).exists() for path in score_paths):
+        return report
+    engine = BacktestEngine(cfg, dataset)
+    return engine.run_raw()
+
+
+def _sector_attrib_frame(report: BacktestReport, sector_frame: pd.DataFrame) -> pd.DataFrame:
+    rows: list[tuple[pd.Timestamp, str, float]] = []
+    for group_id, group in report.groups.items():
+        if group_id == "net":
+            continue
+        for trade in group.trades:
+            entry_date = trade.enter_date
+            if entry_date not in sector_frame.index:
+                continue
+            sector_row = sector_frame.loc[entry_date]
+            for pos in trade.positions:
+                sector = sector_row.get(pos.ticker)
+                if pd.isna(sector):
+                    continue
+                pnl = float(pos.exit_value) - float(pos.entry_value)
+                rows.append((trade.exit_date, str(sector), pnl))
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows, columns=["exit_date", "sector", "pnl"])
+    pivot = frame.pivot_table(index="exit_date", columns="sector", values="pnl", aggfunc="sum")
+    return pivot.sort_index().fillna(0.0)
+
+
+def _maybe_legend(axis: plt.Axes, **kwargs) -> None:
+    handles, labels = axis.get_legend_handles_labels()
+    if handles:
+        axis.legend(handles, labels, **kwargs)
+
+
+def _maybe_legend_multi(axis: plt.Axes, *axes: plt.Axes, **kwargs) -> None:
+    handles, labels = axis.get_legend_handles_labels()
+    for other in axes:
+        extra_h, extra_l = other.get_legend_handles_labels()
+        handles += extra_h
+        labels += extra_l
+    if handles:
+        axis.legend(handles, labels, **kwargs)
+
+
+def _plot_style() -> None:
+    font_name = _select_font()
+    plt.rcParams.update(
+        {
+            "font.family": font_name,
+            "font.sans-serif": [font_name],
+            "axes.unicode_minus": False,
+        }
+    )
+
+
 def _monthly_returns(equity: pd.DataFrame) -> pd.DataFrame:
     if equity.empty:
         return equity
@@ -70,6 +240,23 @@ def _monthly_returns(equity: pd.DataFrame) -> pd.DataFrame:
     long_df.columns = ["exit_date", "sector", "monthly_return"]
     long_df["entry_date"] = long_df["exit_date"].map(entry_map)
     return long_df[["entry_date", "exit_date", "sector", "monthly_return"]]
+
+
+def _monthly_returns_leg(equity: pd.DataFrame, leg: str) -> pd.DataFrame:
+    frame = _monthly_returns(equity)
+    if frame.empty:
+        return frame
+    frame["leg"] = leg
+    return frame[["entry_date", "exit_date", "sector", "leg", "monthly_return"]]
+
+
+def _cum_dd(equity: pd.Series) -> tuple[pd.Series, pd.Series]:
+    eq = equity.dropna()
+    if eq.empty:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    cumulative = eq / eq.iloc[0] - 1.0
+    drawdown = eq.divide(eq.cummax()).subtract(1.0).fillna(0.0)
+    return cumulative, drawdown
 
 
 def _sec_cfg(config: BacktestConfig) -> BacktestConfig:
@@ -101,11 +288,43 @@ def run_verification(
     sector_frame = _sector_frame(config, dataset)
     sector_results = run_sector_backtests(config, dataset=dataset, sector_frame=sector_frame)
     if sector_results:
+        sectors = list(sector_results)
         equity_frame = pd.DataFrame({k: v.equity for k, v in sector_results.items()}).sort_index()
-        returns_frame = pd.DataFrame({k: v.returns for k, v in sector_results.items()}).sort_index()
+        long_equity_frame = pd.DataFrame({k: v.long_equity for k, v in sector_results.items()}).sort_index()
+        short_equity_frame = pd.DataFrame({k: v.short_equity for k, v in sector_results.items()}).sort_index()
+
+        net_cols = {k: v.returns for k, v in sector_results.items()}
+        long_cols = {f"{k}_long": v.long_equity.pct_change().fillna(0.0) for k, v in sector_results.items()}
+        short_cols = {f"{k}_short": v.short_equity.pct_change().fillna(0.0) for k, v in sector_results.items()}
+        returns_frame = pd.DataFrame({**net_cols, **long_cols, **short_cols}).sort_index()
+        ordered_cols: list[str] = []
+        for sector in sectors:
+            if sector in returns_frame.columns:
+                ordered_cols.append(sector)
+            long_name = f"{sector}_long"
+            if long_name in returns_frame.columns:
+                ordered_cols.append(long_name)
+            short_name = f"{sector}_short"
+            if short_name in returns_frame.columns:
+                ordered_cols.append(short_name)
+        returns_frame = returns_frame.reindex(columns=ordered_cols)
         drawdown_frame = equity_frame.divide(equity_frame.cummax()).subtract(1.0).fillna(0.0)
-        monthly_frame = _monthly_returns(equity_frame)
+        monthly_frames = [
+            _monthly_returns_leg(equity_frame, "net"),
+            _monthly_returns_leg(long_equity_frame, "long"),
+            _monthly_returns_leg(short_equity_frame, "short"),
+        ]
+        monthly_frames = [frame for frame in monthly_frames if not frame.empty]
+        monthly_frame = pd.concat(monthly_frames, ignore_index=True) if monthly_frames else pd.DataFrame()
+        if not monthly_frame.empty:
+            monthly_frame.sort_values(["entry_date", "exit_date", "sector", "leg"], inplace=True)
         summary_frame = pd.DataFrame({k: v.stats for k, v in sector_results.items()}).T
+        short_ids = _short_group_ids(config)
+        comp_stats = _ls_union_j(report, sector_frame)
+        long_stats, short_stats = _sel_stability(report, sector_frame, short_ids)
+        summary_frame["comp_j"] = summary_frame.index.map(comp_stats.get)
+        summary_frame["long_j"] = summary_frame.index.map(long_stats.get)
+        summary_frame["short_j"] = summary_frame.index.map(short_stats.get)
 
         equity_frame.to_excel(out_dir / f"sector_equity_{stem}.xlsx")
         returns_frame.to_excel(out_dir / f"sector_returns_{stem}.xlsx")
@@ -114,8 +333,16 @@ def run_verification(
         drawdown_frame.to_excel(out_dir / f"sector_drawdown_{stem}.xlsx")
         summary_frame.to_excel(out_dir / f"sector_summary_{stem}.xlsx")
         _save_sector_overview_plot(sector_results, out_dir, stem)
+        _save_sector_subplots_all_plot(sector_results, out_dir, stem)
+        _save_sector_subplots_ls_plot(sector_results, out_dir, stem)
         _save_sector_subplot_plot(sector_results, out_dir, stem)
         _save_sector_summary_png(summary_frame, out_dir, stem)
+
+    attrib_report = _attrib_report(report, dataset)
+    attrib_frame = _sector_attrib_frame(attrib_report, sector_frame)
+    if not attrib_frame.empty and config.initial_capital:
+        attrib_cum = attrib_frame.div(float(config.initial_capital)).cumsum().sort_index()
+        _save_sector_attribution_plot(attrib_cum, out_dir, stem)
 
     df = sector_top_bottom(config, dataset=dataset, sector_frame=sector_frame)
     xlsx_path = out_dir / f"sector_top_bottom_{stem}.xlsx"
@@ -295,6 +522,7 @@ def run_sector_backtests(
 
     results: dict[str, SectorBacktestResult] = {}
     base_config = _sec_cfg(config)
+    short_ids = _short_group_ids(base_config)
     for sector in sector_names:
         sector_scores = dataset.scores.where(sector_frame == sector)
         sector_scores = sector_scores.dropna(axis=1, how="all")
@@ -305,10 +533,13 @@ def run_sector_backtests(
         net = report.groups.get("net")
         if net is None or net.equity_curve.empty:
             continue
+        long_eq, short_eq = _leg_equity(report, short_ids)
         results[str(sector)] = SectorBacktestResult(
             equity=net.equity_curve,
             returns=net.period_returns,
             stats=net.stats,
+            long_equity=long_eq,
+            short_equity=short_eq,
         )
     return results
 
@@ -436,14 +667,7 @@ def _save_sector_overview_plot(
     out_dir: Path,
     stem: str,
 ) -> None:
-    font_name = _select_font()
-    plt.rcParams.update(
-        {
-            "font.family": font_name,
-            "font.sans-serif": [font_name],
-            "axes.unicode_minus": False,
-        }
-    )
+    _plot_style()
     sectors = [name for name, result in sector_results.items() if not result.equity.dropna().empty]
     if not sectors:
         return
@@ -463,7 +687,7 @@ def _save_sector_overview_plot(
     axes[0].set_title("Sector Cumulative Return (net)", fontsize=11)
     axes[0].set_ylabel("Cumulative Return")
     axes[0].yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
-    axes[0].legend(loc="upper left", ncol=4, frameon=False, fontsize=8.5)
+    _maybe_legend(axes[0], loc="upper left", ncol=4, frameon=False, fontsize=8.5)
 
     axes[1].set_title("Sector Drawdown", fontsize=11)
     axes[1].set_ylabel("Drawdown")
@@ -481,19 +705,147 @@ def _save_sector_overview_plot(
     plt.close(fig)
 
 
+def _save_sector_subplots_all_plot(
+    sector_results: dict[str, SectorBacktestResult],
+    out_dir: Path,
+    stem: str,
+) -> None:
+    _plot_style()
+    sectors = [name for name, result in sector_results.items() if not result.equity.dropna().empty]
+    if not sectors:
+        return
+
+    cols = 3
+    rows = int((len(sectors) + cols - 1) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 3.2), dpi=180, sharex=False)
+    axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
+
+    for idx, sector in enumerate(sectors):
+        axis = axes[idx]
+        result = sector_results[sector]
+        series_map = {
+            "net": result.equity,
+            "long": result.long_equity,
+            "short": result.short_equity,
+        }
+        colors = {"net": "#4F5DFF", "long": "#22C55E", "short": "#FF6B81"}
+        for label, equity in series_map.items():
+            if equity is None or equity.dropna().empty:
+                continue
+            cumulative = equity / equity.iloc[0] - 1.0
+            axis.plot(cumulative.index, cumulative.values, color=colors[label], linewidth=1.2, label=label)
+        axis.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+        axis.set_title(str(sector), fontsize=10)
+        axis.grid(False)
+        for spine in axis.spines.values():
+            spine.set_visible(False)
+        _maybe_legend(axis, loc="upper left", ncol=3, frameon=False, fontsize=7.5)
+
+    for axis in axes[len(sectors):]:
+        axis.axis("off")
+
+    path = out_dir / f"sector_subplots_all_{stem}.png"
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+
+def _save_sector_subplots_ls_plot(
+    sector_results: dict[str, SectorBacktestResult],
+    out_dir: Path,
+    stem: str,
+) -> None:
+    _plot_style()
+    sectors = [name for name, result in sector_results.items() if not result.equity.dropna().empty]
+    if not sectors:
+        return
+
+    cols = 3
+    rows = int((len(sectors) + cols - 1) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 3.2), dpi=180, sharex=False)
+    axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
+
+    for idx, sector in enumerate(sectors):
+        axis = axes[idx]
+        result = sector_results[sector]
+        long_cum, long_dd = _cum_dd(result.long_equity)
+        short_cum, short_dd = _cum_dd(result.short_equity)
+        has_long = not long_cum.empty
+        has_short = not short_cum.empty
+        if not has_long and not has_short:
+            axis.axis("off")
+            continue
+
+        if has_long:
+            axis.plot(
+                long_cum.index,
+                long_cum.values,
+                color="#15803D",
+                linewidth=1.4,
+                marker="o",
+                markevery=6,
+                markersize=2.5,
+                label="L",
+            )
+        if has_short:
+            axis.plot(
+                short_cum.index,
+                short_cum.values,
+                color="#E11D48",
+                linewidth=1.4,
+                marker="o",
+                markevery=6,
+                markersize=2.5,
+                label="S",
+            )
+        axis.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+        axis.set_title(str(sector), fontsize=10)
+        axis.grid(False)
+        for spine in axis.spines.values():
+            spine.set_visible(False)
+
+        twin = axis.twinx()
+        if has_long:
+            twin.plot(
+                long_dd.index,
+                long_dd.values,
+                color="#86EFAC",
+                linewidth=0.9,
+                linestyle="--",
+                alpha=0.7,
+                label="L-dd",
+            )
+        if has_short:
+            twin.plot(
+                short_dd.index,
+                short_dd.values,
+                color="#FDA4AF",
+                linewidth=0.9,
+                linestyle="--",
+                alpha=0.7,
+                label="S-dd",
+            )
+        twin.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+        twin.grid(False)
+        for spine in twin.spines.values():
+            spine.set_visible(False)
+        _maybe_legend_multi(axis, twin, loc="upper left", ncol=2, frameon=False, fontsize=7.0)
+
+    for axis in axes[len(sectors):]:
+        axis.axis("off")
+
+    path = out_dir / f"sector_subplots_ls_{stem}.png"
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+
 def _save_sector_subplot_plot(
     sector_results: dict[str, SectorBacktestResult],
     out_dir: Path,
     stem: str,
 ) -> None:
-    font_name = _select_font()
-    plt.rcParams.update(
-        {
-            "font.family": font_name,
-            "font.sans-serif": [font_name],
-            "axes.unicode_minus": False,
-        }
-    )
+    _plot_style()
     sectors = [name for name, result in sector_results.items() if not result.equity.dropna().empty]
     if not sectors:
         return
@@ -539,7 +891,8 @@ def _save_sector_subplot_plot(
 def _save_sector_summary_png(summary: pd.DataFrame, out_dir: Path, stem: str) -> None:
     if summary.empty:
         return
-    columns = ["total_return", "cagr", "sharpe", "max_drawdown"]
+    _plot_style()
+    columns = ["total_return", "cagr", "sharpe", "max_drawdown", "comp_j", "long_j", "short_j"]
     table = summary[[col for col in columns if col in summary.columns]].copy()
     table = table.sort_values("total_return", ascending=False)
     table = table.apply(lambda col: col.map(lambda val: _format_stat(col.name, val)))
@@ -575,9 +928,42 @@ def _save_sector_summary_png(summary: pd.DataFrame, out_dir: Path, stem: str) ->
     plt.close(fig)
 
 
+def _save_sector_attribution_plot(
+    cumulative: pd.DataFrame,
+    out_dir: Path,
+    stem: str,
+) -> None:
+    if cumulative.empty:
+        return
+    _plot_style()
+    sectors = list(cumulative.columns)
+    palette = _extended_palette(len(sectors))
+    fig, ax = plt.subplots(figsize=(12.0, 5.8), dpi=180)
+    pos = cumulative.clip(lower=0.0)
+    neg = cumulative.clip(upper=0.0)
+    pos_list = [pos[sector].to_numpy() for sector in sectors]
+    neg_list = [neg[sector].to_numpy() for sector in sectors]
+    ax.stackplot(cumulative.index, pos_list, labels=sectors, colors=palette, alpha=0.9)
+    if neg.values.any():
+        ax.stackplot(cumulative.index, neg_list, colors=palette, alpha=0.45)
+    ax.axhline(0.0, color="#D1D1D6", linewidth=1)
+    ax.set_title("Sector Attribution (cumulative, signed)", fontsize=11)
+    ax.set_ylabel("Cumulative Contribution")
+    ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+    _maybe_legend(ax, loc="upper left", ncol=4, frameon=False, fontsize=8.5)
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    path = out_dir / f"sector_attribution_{stem}.png"
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+
 def _format_stat(column: str, value: float) -> str:
     if isinstance(value, (int, float)):
-        if column in {"total_return", "cagr", "max_drawdown"}:
+        if column in {"total_return", "cagr", "max_drawdown", "comp_j", "long_j", "short_j"}:
             return f"{value * 100:0.2f}%"
         if column in {"sharpe", "volatility"}:
             return f"{value:0.2f}"
