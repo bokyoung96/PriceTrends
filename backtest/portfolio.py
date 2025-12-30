@@ -88,7 +88,7 @@ class PortfolioTrack:
         weights: pd.Series | None = None,
         entry_prices: pd.Series | None = None,
     ) -> None:
-        capital_in = float(self.capital)
+        capital_in = max(0.0, float(self.capital))
         requested = tuple(tickers)
         if price_slice.empty:
             raise ValueError("Price slice for the rebalance window is empty.")
@@ -161,6 +161,9 @@ class PortfolioTrack:
             exit_capital=capital_out,
             entry_prices=entry_prices,
         )
+        daily_equity, hit_floor = self._apply_equity_floor(daily_equity)
+        if hit_floor:
+            capital_out = 0.0
 
         trade_note = self._merge_notes(note, self._halted_message(halted))
         self._record_trade(
@@ -308,6 +311,22 @@ class PortfolioTrack:
         equity.iloc[0] = investable
         equity.iloc[-1] = exit_capital
         return equity
+
+    def _apply_equity_floor(
+        self,
+        equity: pd.Series | None,
+        *,
+        floor: float = 0.0,
+    ) -> tuple[pd.Series | None, bool]:
+        if equity is None or equity.empty:
+            return equity, False
+        hits = equity <= floor
+        if not hits.any():
+            return equity, False
+        first_hit = hits.idxmax()
+        floored = equity.copy()
+        floored.loc[first_hit:] = floor
+        return floored, True
 
     def _normalize_weights(self, tickers: Sequence[str], weights: pd.Series | None) -> pd.Series | None:
         if weights is None:
