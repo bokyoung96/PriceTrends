@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, NamedTuple
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import ticker
@@ -242,12 +243,30 @@ def _monthly_returns(equity: pd.DataFrame) -> pd.DataFrame:
     return long_df[["entry_date", "exit_date", "sector", "monthly_return"]]
 
 
+def _monthly_return_series(equity: pd.Series) -> pd.Series:
+    series = equity.dropna()
+    if series.empty:
+        return pd.Series(dtype=float)
+    monthly = series.resample("ME").last().dropna()
+    if len(monthly.index) < 2:
+        return pd.Series(dtype=float)
+    return monthly.pct_change().dropna()
+
+
 def _monthly_returns_leg(equity: pd.DataFrame, leg: str) -> pd.DataFrame:
     frame = _monthly_returns(equity)
     if frame.empty:
         return frame
     frame["leg"] = leg
     return frame[["entry_date", "exit_date", "sector", "leg", "monthly_return"]]
+
+
+def _daily_return_series(equity: pd.Series) -> pd.Series:
+    series = equity.dropna()
+    if series.empty:
+        return pd.Series(dtype=float)
+    returns = series.pct_change().dropna()
+    return returns
 
 
 def _cum_dd(equity: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -319,6 +338,14 @@ def run_verification(
         if not monthly_frame.empty:
             monthly_frame.sort_values(["entry_date", "exit_date", "sector", "leg"], inplace=True)
         summary_frame = pd.DataFrame({k: v.stats for k, v in sector_results.items()}).T
+        summary_frame["monthly_avg_return"] = 0.0
+        summary_frame["monthly_win_rate"] = 0.0
+        for sector, result in sector_results.items():
+            monthly = _monthly_return_series(result.equity)
+            if monthly.empty:
+                continue
+            summary_frame.loc[sector, "monthly_avg_return"] = float(monthly.mean())
+            summary_frame.loc[sector, "monthly_win_rate"] = float((monthly > 0).mean())
         short_ids = _short_group_ids(config)
         comp_stats = _ls_union_j(report, sector_frame)
         long_stats, short_stats = _sel_stability(report, sector_frame, short_ids)
@@ -335,6 +362,8 @@ def run_verification(
         _save_sector_overview_plot(sector_results, out_dir, stem)
         _save_sector_subplots_all_plot(sector_results, out_dir, stem)
         _save_sector_subplots_ls_plot(sector_results, out_dir, stem)
+        _save_sector_subplots_hist_plot(sector_results, out_dir, stem)
+        _save_sector_subplots_hist_monthly_plot(sector_results, out_dir, stem)
         _save_sector_subplot_plot(sector_results, out_dir, stem)
         _save_sector_summary_png(summary_frame, out_dir, stem)
 
@@ -528,8 +557,18 @@ def run_sector_backtests(
         sector_scores = sector_scores.dropna(axis=1, how="all")
         if sector_scores.empty:
             continue
-        tester = Backtester(base_config)
-        report = tester.run(scores=sector_scores, prices=dataset.prices)
+        # Build a sector-only dataset to avoid ffill on masked scores.
+        sector_prices = dataset.prices.reindex(columns=sector_scores.columns)
+        sector_weights = dataset.weights.reindex(columns=sector_scores.columns) if dataset.weights is not None else None
+        sector_open = dataset.open_prices.reindex(columns=sector_scores.columns) if dataset.open_prices is not None else None
+        sector_dataset = BacktestDataset(
+            scores=sector_scores,
+            prices=sector_prices,
+            bench=dataset.bench,
+            weights=sector_weights,
+            open_prices=sector_open,
+        )
+        report = BacktestEngine(base_config, sector_dataset).run()
         net = report.groups.get("net")
         if net is None or net.equity_curve.empty:
             continue
@@ -840,6 +879,190 @@ def _save_sector_subplots_ls_plot(
     plt.close(fig)
 
 
+def _save_sector_subplots_hist_plot(
+    sector_results: dict[str, SectorBacktestResult],
+    out_dir: Path,
+    stem: str,
+) -> None:
+    _plot_style()
+    sectors = [name for name, result in sector_results.items() if not result.equity.dropna().empty]
+    if not sectors:
+        return
+
+    cols = 3
+    rows = int((len(sectors) + cols - 1) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 3.2), dpi=180, sharex=False)
+    axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
+
+    colors = {"net": "#4F5DFF", "long": "#22C55E", "short": "#FF6B81"}
+
+    for idx, sector in enumerate(sectors):
+        axis = axes[idx]
+        result = sector_results[sector]
+        series_map = {
+            "net": result.equity,
+            "long": result.long_equity,
+            "short": result.short_equity,
+        }
+        returns_map = {
+            label: _daily_return_series(series) for label, series in series_map.items()
+        }
+        values = [
+            (returns * 100.0).to_numpy()
+            for returns in returns_map.values()
+            if returns is not None and not returns.empty
+        ]
+        if not values:
+            axis.axis("off")
+            continue
+        combined = np.concatenate(values)
+        vmin = float(np.nanmin(combined))
+        vmax = float(np.nanmax(combined))
+        if not np.isfinite(vmin) or not np.isfinite(vmax):
+            axis.axis("off")
+            continue
+        if vmin == vmax:
+            vmin -= 0.1
+            vmax += 0.1
+        pad = (vmax - vmin) * 0.05
+        bins = np.linspace(vmin - pad, vmax + pad, 50)
+
+        for label in ("long", "short"):
+            data = returns_map[label]
+            if data is None or data.empty:
+                continue
+            axis.hist(
+                data * 100.0,
+                bins=bins,
+                color=colors[label],
+                alpha=0.35,
+                edgecolor="#FFFFFF",
+                linewidth=0.5,
+                label=label,
+            )
+        net_data = returns_map["net"]
+        if net_data is not None and not net_data.empty:
+            axis.hist(
+                net_data * 100.0,
+                bins=bins,
+                color=colors["net"],
+                alpha=0.85,
+                edgecolor=colors["net"],
+                linewidth=1.0,
+                label="net",
+            )
+
+        axis.axvline(0, color="#8E8E93", linewidth=0.8)
+        axis.set_title(str(sector), fontsize=10)
+        axis.set_xlabel("Daily Return (%)", fontsize=8.5)
+        axis.set_ylabel("Count", fontsize=8.5)
+        axis.tick_params(axis="both", labelsize=8)
+        axis.grid(False)
+        for spine in axis.spines.values():
+            spine.set_visible(False)
+        _maybe_legend(axis, loc="upper right", ncol=1, frameon=False, fontsize=7.5)
+
+    for axis in axes[len(sectors):]:
+        axis.axis("off")
+
+    path = out_dir / f"sector_subplots_hist_{stem}.png"
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+
+def _save_sector_subplots_hist_monthly_plot(
+    sector_results: dict[str, SectorBacktestResult],
+    out_dir: Path,
+    stem: str,
+) -> None:
+    _plot_style()
+    sectors = [name for name, result in sector_results.items() if not result.equity.dropna().empty]
+    if not sectors:
+        return
+
+    cols = 3
+    rows = int((len(sectors) + cols - 1) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4.2, rows * 3.2), dpi=180, sharex=False)
+    axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
+
+    colors = {"net": "#4F5DFF", "long": "#22C55E", "short": "#FF6B81"}
+
+    for idx, sector in enumerate(sectors):
+        axis = axes[idx]
+        result = sector_results[sector]
+        series_map = {
+            "net": result.equity,
+            "long": result.long_equity,
+            "short": result.short_equity,
+        }
+        returns_map = {
+            label: _monthly_return_series(series) for label, series in series_map.items()
+        }
+        values = [
+            (returns * 100.0).to_numpy()
+            for returns in returns_map.values()
+            if returns is not None and not returns.empty
+        ]
+        if not values:
+            axis.axis("off")
+            continue
+        combined = np.concatenate(values)
+        vmin = float(np.nanmin(combined))
+        vmax = float(np.nanmax(combined))
+        if not np.isfinite(vmin) or not np.isfinite(vmax):
+            axis.axis("off")
+            continue
+        if vmin == vmax:
+            vmin -= 0.1
+            vmax += 0.1
+        pad = (vmax - vmin) * 0.05
+        bins = np.linspace(vmin - pad, vmax + pad, 50)
+
+        for label in ("long", "short"):
+            data = returns_map[label]
+            if data is None or data.empty:
+                continue
+            axis.hist(
+                data * 100.0,
+                bins=bins,
+                color=colors[label],
+                alpha=0.35,
+                edgecolor="#FFFFFF",
+                linewidth=0.5,
+                label=label,
+            )
+        net_data = returns_map["net"]
+        if net_data is not None and not net_data.empty:
+            axis.hist(
+                net_data * 100.0,
+                bins=bins,
+                color=colors["net"],
+                alpha=0.85,
+                edgecolor=colors["net"],
+                linewidth=1.0,
+                label="net",
+            )
+
+        axis.axvline(0, color="#8E8E93", linewidth=0.8)
+        axis.set_title(str(sector), fontsize=10)
+        axis.set_xlabel("Monthly Return (%)", fontsize=8.5)
+        axis.set_ylabel("Count", fontsize=8.5)
+        axis.tick_params(axis="both", labelsize=8)
+        axis.grid(False)
+        for spine in axis.spines.values():
+            spine.set_visible(False)
+        _maybe_legend(axis, loc="upper right", ncol=1, frameon=False, fontsize=7.5)
+
+    for axis in axes[len(sectors):]:
+        axis.axis("off")
+
+    path = out_dir / f"sector_subplots_hist_m_{stem}.png"
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+
 def _save_sector_subplot_plot(
     sector_results: dict[str, SectorBacktestResult],
     out_dir: Path,
@@ -892,10 +1115,32 @@ def _save_sector_summary_png(summary: pd.DataFrame, out_dir: Path, stem: str) ->
     if summary.empty:
         return
     _plot_style()
-    columns = ["total_return", "cagr", "sharpe", "max_drawdown", "comp_j", "long_j", "short_j"]
+    columns = [
+        "total_return",
+        "cagr",
+        "sharpe",
+        "max_drawdown",
+        "monthly_avg_return",
+        "monthly_win_rate",
+        "comp_j",
+        "long_j",
+        "short_j",
+    ]
     table = summary[[col for col in columns if col in summary.columns]].copy()
     table = table.sort_values("total_return", ascending=False)
     table = table.apply(lambda col: col.map(lambda val: _format_stat(col.name, val)))
+    label_map = {
+        "total_return": "TotRet",
+        "cagr": "CAGR",
+        "sharpe": "Sharpe",
+        "max_drawdown": "MDD",
+        "monthly_avg_return": "M.Avg",
+        "monthly_win_rate": "M.Win",
+        "comp_j": "CompJ",
+        "long_j": "LJ",
+        "short_j": "SJ",
+    }
+    table = table.rename(columns=label_map)
 
     fig, ax = plt.subplots(figsize=(7.5, 0.4 + 0.3 * len(table)), dpi=180)
     ax.axis("off")
@@ -963,7 +1208,16 @@ def _save_sector_attribution_plot(
 
 def _format_stat(column: str, value: float) -> str:
     if isinstance(value, (int, float)):
-        if column in {"total_return", "cagr", "max_drawdown", "comp_j", "long_j", "short_j"}:
+        if column in {
+            "total_return",
+            "cagr",
+            "max_drawdown",
+            "monthly_avg_return",
+            "monthly_win_rate",
+            "comp_j",
+            "long_j",
+            "short_j",
+        }:
             return f"{value * 100:0.2f}%"
         if column in {"sharpe", "volatility"}:
             return f"{value:0.2f}"
@@ -995,10 +1249,10 @@ if __name__ == "__main__":
         benchmark_symbol=BenchmarkType.KOSPI200,
         start_date="2012-01-31",
     )
-    name = "ls_sn_global"
+    name = "ls_sn_unit_tb3"
     paths = run_verification(example_name=name, base_opts=default_opts)
     print(f"Saved verification outputs: {paths}")
     runner = ExampleRunner(base_opts=default_opts)
     tester = runner.run_spec(_pick_example(name))
-    health_df = sector_monthly_holdings(tester.latest_report().config, "건강관리")
-    print(health_df.head())
+    df = sector_monthly_holdings(tester.latest_report().config, "산업재")
+    print(df.head())

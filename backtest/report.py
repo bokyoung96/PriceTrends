@@ -196,13 +196,24 @@ class BacktestReport:
 
     def _format_stat(self, column: str, value: float) -> str:
         currency_fields = {"final_equity", "pnl"}
-        percent_fields = {"total_return", "cagr", "volatility", "avg_period_return", "max_drawdown", "win_rate"}
+        percent_fields = {
+            "total_return",
+            "cagr",
+            "volatility",
+            "avg_period_return",
+            "monthly_avg_return",
+            "max_drawdown",
+            "win_rate",
+            "monthly_win_rate",
+        }
         if column in currency_fields:
             return f"{value:,.0f}"
         if column in percent_fields:
             suffix = ""
             if column == "avg_period_return":
                 suffix = f" ({self.config.rebalance_frequency.upper()})"
+            elif column in {"monthly_avg_return", "monthly_win_rate"}:
+                suffix = " (M)"
             return f"{value * 100:0.2f}%{suffix}"
         return f"{value:0.4f}"
 
@@ -495,7 +506,9 @@ class BacktestReport:
                 "final_equity": 0.0,
                 "pnl": 0.0,
                 "avg_period_return": 0.0,
+                "monthly_avg_return": 0.0,
                 "win_rate": 0.0,
+                "monthly_win_rate": 0.0,
             }
 
         start = float(equity.iloc[0])
@@ -513,6 +526,9 @@ class BacktestReport:
         avg_period_return = float(returns.mean()) if not returns.empty else 0.0
         win_rate = float((returns > 0).mean()) if not returns.empty else 0.0
         pnl = end - start
+        monthly_returns = self._monthly_returns(equity)
+        monthly_avg_return = float(monthly_returns.mean()) if not monthly_returns.empty else 0.0
+        monthly_win_rate = float((monthly_returns > 0).mean()) if not monthly_returns.empty else 0.0
 
         return {
             "total_return": float(total_return),
@@ -523,7 +539,9 @@ class BacktestReport:
             "final_equity": float(end),
             "pnl": float(pnl),
             "avg_period_return": float(avg_period_return),
+            "monthly_avg_return": float(monthly_avg_return),
             "win_rate": float(win_rate),
+            "monthly_win_rate": float(monthly_win_rate),
         }
 
     def _periods_per_year(self, index: pd.Index | None = None) -> float:
@@ -580,6 +598,15 @@ class BacktestReport:
         month_order = sorted(pivot.columns)
         pivot = pivot.reindex(columns=month_order)
         return pivot
+
+    def _monthly_returns(self, equity: pd.Series) -> pd.Series:
+        series = equity.dropna()
+        if series.empty:
+            return pd.Series(dtype=float)
+        monthly_nav = series.resample("ME").last().dropna()
+        if len(monthly_nav) < 2:
+            return pd.Series(dtype=float)
+        return monthly_nav.pct_change().dropna()
 
     def _render_heatmap(self, axis: Axes, matrix: pd.DataFrame, title: str, cmap) -> None:
         self._add_panel_background(axis)

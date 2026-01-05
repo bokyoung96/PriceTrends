@@ -15,9 +15,12 @@ if str(ROOT) not in sys.path:
 
 from backtest.costs import ExecutionCostModel
 from backtest.data_sources import BacktestDataLoader
-from backtest.grouping import (PortfolioGroupingStrategy,
-                               QuantileGroupingStrategy,
-                               SectorNeutralGroupingStrategy)
+from backtest.grouping import (
+    FixedCountGroupingStrategy,
+    PortfolioGroupingStrategy,
+    QuantileGroupingStrategy,
+    SectorNeutralGroupingStrategy,
+)
 from core.spec import MarketMetric, MarketUniverse
 from utils.root import DATA_ROOT, PROJECT_ROOT, SCORES_ROOT
 
@@ -174,6 +177,8 @@ class BacktestConfig:
     rebalance_frequency: str = "M"
     min_assets: int = 20
     min_score: float | None = None
+    top_n: int | None = None
+    bottom_n: int | None = None
     active_quantiles: Sequence[int] | None = None
     benchmark_symbol: BenchmarkType | str | None = BenchmarkType.KOSPI200
     benchmark_path: Path | str = field(default_factory=_default_benchmark_path)
@@ -227,6 +232,10 @@ class BacktestConfig:
         object.__setattr__(self, "sector_path", self._to_project_path(self.sector_path))
         object.__setattr__(self, "sector_unit", bool(self.sector_unit))
 
+        if self.top_n is not None:
+            object.__setattr__(self, "top_n", int(self.top_n))
+        if self.bottom_n is not None:
+            object.__setattr__(self, "bottom_n", int(self.bottom_n))
         self._validate_numeric_fields()
         if self.sector_unit and not self.sector_neutral:
             raise ValueError("sector_unit requires sector_neutral=True.")
@@ -267,13 +276,26 @@ class BacktestConfig:
         if self.portfolio_grouping is not None:
             return self.portfolio_grouping
             
-        base_strategy = QuantileGroupingStrategy(
-            quantiles=self.quantiles,
-            min_assets=self.min_assets,
-            allow_partial=self.allow_partial_buckets,
-            min_score=self.min_score,
-            enabled_quantiles=self.active_quantiles,
-        )
+        if self.top_n is not None or self.bottom_n is not None:
+            top_n = int(self.top_n) if self.top_n is not None else int(self.bottom_n)
+            bottom_n = int(self.bottom_n) if self.bottom_n is not None else int(self.top_n)
+            base_strategy = FixedCountGroupingStrategy(
+                quantiles=self.quantiles,
+                top_n=top_n,
+                bottom_n=bottom_n,
+                min_assets=self.min_assets,
+                allow_partial=self.allow_partial_buckets,
+                min_score=self.min_score,
+                enabled_quantiles=self.active_quantiles,
+            )
+        else:
+            base_strategy = QuantileGroupingStrategy(
+                quantiles=self.quantiles,
+                min_assets=self.min_assets,
+                allow_partial=self.allow_partial_buckets,
+                min_score=self.min_score,
+                enabled_quantiles=self.active_quantiles,
+            )
         
         if not self.sector_neutral:
             return base_strategy
@@ -346,8 +368,16 @@ class BacktestConfig:
             raise ValueError("initial_capital must be positive.")
         if self.quantiles < 1:
             raise ValueError("quantiles must be at least 1.")
-        if self.min_assets < self.quantiles:
-            raise ValueError("min_assets must be >= quantiles to form buckets.")
+        if self.top_n is None and self.bottom_n is None:
+            if self.min_assets < self.quantiles:
+                raise ValueError("min_assets must be >= quantiles to form buckets.")
+        if (self.top_n is None) != (self.bottom_n is None):
+            raise ValueError("top_n and bottom_n must be set together.")
+        if self.top_n is not None:
+            if self.top_n <= 0 or self.bottom_n <= 0:
+                raise ValueError("top_n and bottom_n must be positive.")
+            if self.quantiles < 2:
+                raise ValueError("Fixed-count selection requires quantiles >= 2.")
         if self.min_score is not None:
             if not math.isfinite(float(self.min_score)):
                 raise ValueError("min_score must be finite when provided.")
