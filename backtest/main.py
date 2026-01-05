@@ -34,6 +34,8 @@ CFG_KEYS = (
     "rebalance_frequency",
     "min_assets",
     "min_score",
+    "top_n",
+    "bottom_n",
     "active_quantiles",
     "benchmark_symbol",
     "benchmark_path",
@@ -64,7 +66,7 @@ CFG_KEYS = (
 BASE_OPTS = dict(
     rebalance_frequency="M",
     portfolio_weighting="eq",
-    apply_trading_costs=True,
+    apply_trading_costs=False,
     buy_cost_bps=2.0,
     sell_cost_bps=2.0,
     tax_bps=15.0,
@@ -280,6 +282,24 @@ EXAMPLES: Dict[str, ExampleSpec] = {
         },
         output_filename="backtest_ls_sn_u_80.png",
     ),
+    "ls_sn_unit_tb3": ExampleSpec(
+        name="ls_sn_unit_tb3",
+        scores=_transformer_scores_mfd_bottom_pct(bottom_pct=80),
+        group_selector=("q1", "q5", "net"),
+        sector_neutral=True,
+        overrides={
+            "active_quantiles": (0, 4),
+            "long_short_mode": "net",
+            "short_quantiles": (0,),
+            "min_assets": 5,
+            "top_n": 3,
+            "bottom_n": 3,
+            "label_prefix": "ls_sn_u_80_tb3",
+            "dollar_neutral_net": True,
+            "sector_unit": True,
+        },
+        output_filename="backtest_ls_sn_u_80_tb3.png",
+    ),
     # NOTE: Transformer variants
     "transformer_medium_multi": ExampleSpec(
         name="transformer_medium_multi",
@@ -431,5 +451,5 @@ def main(selected_examples: Tuple[str, ...] | None = None) -> Dict[str, Backtest
 
 
 if __name__ == "__main__":
-    examples = ("ls_sn_global", "ls_sn_unit")
+    examples = ("ls_sn_unit_tb3",)
     main(examples)
