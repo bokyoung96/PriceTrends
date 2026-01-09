@@ -110,6 +110,7 @@ class DatasetFactory:
         header_row: int = 7,
         skip_rows: int = 6,
         index_column: int | str | None = 0,
+        extra_preprocessors: Sequence[DatasetPreprocessor] | None = None,
     ) -> DatasetSpec:
         source = self.data_root / (source_name or metric.source_filename)
         output = self.data_root / metric.parquet_filename
@@ -117,8 +118,10 @@ class DatasetFactory:
             slice_rows(skip_rows),
             drop_invalid_marker(),
             ensure_datetime_index(),
-            drop_all_na_columns(),
         ]
+        if extra_preprocessors:
+            preprocessors.extend(extra_preprocessors)
+        preprocessors.append(drop_all_na_columns())
         return DatasetSpec(
             name=f"metric:{metric.value}",
             source=source,
@@ -211,6 +214,54 @@ def drop_invalid_marker(marker: str = "#INVALID OPTION") -> DatasetPreprocessor:
     return _inner
 
 
+def map_trans_ban_status(normal_value: int = 1, halted_value: int = 0) -> DatasetPreprocessor:
+    normal_label = "\uc815\uc0c1"
+    halted_label = "\uac70\ub798\uc815\uc9c0"
+    mapping = {normal_label: str(normal_value), halted_label: str(halted_value)}
+
+    def _inner(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        obj_cols = out.select_dtypes(include=["object", "string"]).columns
+        if len(obj_cols) == 0:
+            return out
+        for col in obj_cols:
+            series = out[col].astype("string")
+            series = series.str.strip().replace(mapping)
+            out[col] = series
+        return out
+
+    return _inner
+
+
+def map_sector_names(mapping: dict[str, str] | None = None) -> DatasetPreprocessor:
+    default_mapping = {
+        "IT": "Information Technology",
+        "\uac74\uac15\uad00\ub9ac": "Health Care",
+        "\uacbd\uae30\uad00\ub828\uc18c\ube44\uc7ac": "Consumer Discretionary",
+        "\uae08\uc735": "Financials",
+        "\uc0b0\uc5c5\uc7ac": "Industrials",
+        "\uc18c\uc7ac": "Materials",
+        "\uc5d0\ub108\uc9c0": "Energy",
+        "\uc720\ud2f8\ub9ac\ud2f0": "Utilities",
+        "\ucee4\ubba4\ub2c8\ucf00\uc774\uc158\uc11c\ube44\uc2a4": "Communication Services",
+        "\ud544\uc218\uc18c\ube44\uc7ac": "Consumer Staples",
+    }
+
+    def _inner(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        obj_cols = out.select_dtypes(include=["object", "string"]).columns
+        if len(obj_cols) == 0:
+            return out
+        mapping_local = mapping or default_mapping
+        for col in obj_cols:
+            series = out[col].astype("string")
+            series = series.str.strip().replace(mapping_local)
+            out[col] = series
+        return out
+
+    return _inner
+
+
 def ensure_datetime_index() -> DatasetPreprocessor:
     def _inner(df: pd.DataFrame) -> pd.DataFrame:
         df.index = pd.to_datetime(df.index, errors="coerce")
@@ -254,11 +305,18 @@ if __name__ == "__main__":
     factory = DatasetFactory()
     res: dict[str, pd.DataFrame] = {}
     examples = {
-        # "constituent": factory.constituents(market=MarketUniverse.KOSPI200),
-        # "metric:mktcap": factory.metric(metric=MarketMetric.MKTCAP),
-        # "metric:trans_ban": factory.metric(metric=MarketMetric.TRANS_BAN),
-        # "metric:bm": factory.bm(),
-        "metric:sector": factory.metric(metric=MarketMetric.SECTOR),
+        "constituent": factory.constituents(market=MarketUniverse.KOSPI200),
+        "metric:mktcap": factory.metric(metric=MarketMetric.MKTCAP),
+        "metric:trans_ban": factory.metric(
+            metric=MarketMetric.TRANS_BAN,
+            source_name="TRANSACTION_BAN.xlsx",
+            extra_preprocessors=[map_trans_ban_status(), ensure_numeric_values()],
+        ),
+        "metric:bm": factory.bm(),
+        "metric:sector": factory.metric(
+            metric=MarketMetric.SECTOR,
+            extra_preprocessors=[map_sector_names()],
+        ),
         # "metric:foreign": factory.metrics(),
     }
     for label, spec in examples.items():
