@@ -66,7 +66,7 @@ CFG_KEYS = (
 BASE_OPTS = dict(
     rebalance_frequency="M",
     portfolio_weighting="eq",
-    apply_trading_costs=False,
+    apply_trading_costs=True,
     buy_cost_bps=2.0,
     sell_cost_bps=2.0,
     tax_bps=15.0,
@@ -74,6 +74,7 @@ BASE_OPTS = dict(
     entry_price_mode="close",
     benchmark_symbol=BenchmarkType.KOSPI200,
     start_date="2012-01-31",
+    end_date="2025-10-31",
 )
 
 

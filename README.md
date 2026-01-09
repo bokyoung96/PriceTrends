@@ -48,6 +48,13 @@ Tweak `backtest/main.py` examples for scores, rebal freq, costs, long/short mode
 
 ---
 
+## Data Updates (QuantiWise)
+After updating QuantiWise Excel files in `DATA/`, regenerate parquet datasets by running:
+- `python core/loader.py` (OHLCV from `DATA/DATA.xlsx`)
+- `python core/spec.py` (BM, CONST_KOSPI200, MKTCAP, SECTOR, TRANS_BAN)
+
+---
+
 ## Project Structure
 ```
 PriceTrends/

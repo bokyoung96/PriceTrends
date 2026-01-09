@@ -1248,11 +1248,12 @@ if __name__ == "__main__":
         entry_price_mode="close",
         benchmark_symbol=BenchmarkType.KOSPI200,
         start_date="2012-01-31",
+        end_date="2025-10-31",
     )
     name = "ls_sn_unit_tb3"
     paths = run_verification(example_name=name, base_opts=default_opts)
     print(f"Saved verification outputs: {paths}")
     runner = ExampleRunner(base_opts=default_opts)
     tester = runner.run_spec(_pick_example(name))
-    df = sector_monthly_holdings(tester.latest_report().config, "산업재")
+    df = sector_monthly_holdings(tester.latest_report().config, "Industrials")
     print(df.head())
